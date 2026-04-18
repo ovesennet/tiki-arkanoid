@@ -1,0 +1,841 @@
+Core rules of Arkanoid
+You control the Vaus paddle at the bottom of the screen and keep the ball in play while clearing the stage’s breakable bricks. If the ball falls below the paddle, you lose a life. The C64 version has 5 lives to start. The game has 32 regular stages, then a boss fight as stage 33. 
+A stage is cleared when all breakable bricks are gone. Indestructible bricks do not count toward stage completion. The paddle only moves horizontally, and the bounce angle depends on where the ball hits the paddle. 
+Brick and power-up behavior
+Arkanoid uses three practical brick categories:
+
+
+Normal colored bricks: destroyed in one hit.
+
+
+Silver bricks: require multiple hits.
+
+
+Gold / indestructible border bricks: cannot be destroyed and are not required to finish the level. 
+
+
+The power capsules in the C64 version are:
+
+
+S = Slow
+
+
+C = Catch
+
+
+E = Enlarge
+
+
+D = Disruption / 3 balls
+
+
+L = Laser
+
+
+B = Break to next level
+
+
+P = Extra life 
+
+
+Also, the C64 version awards an extra life every 20,000 points. 
+How levels progress
+Level progression is mainly:
+
+
+Start stage with ball attached to paddle.
+
+
+Launch ball.
+
+
+Destroy all required bricks.
+
+
+Advance to next stage.
+
+
+Difficulty rises through layout complexity, tighter channels, tougher silver bricks, more awkward rebounds, and generally faster pace. Silver bricks need more hits as the game advances. 
+
+
+The B capsule is important: it opens an exit on the right side, and sending the ball through it skips directly to the next stage and gives a 10,000 point bonus. 
+What matters if you want it close to C64
+The parts to imitate are:
+
+
+Precise paddle feel
+
+
+Predictable but controllable bounce angles
+
+
+Ball speed ramping
+
+
+Stage-specific brick layouts
+
+
+Power-up timing and drop rate
+
+
+Very clean collision handling
+
+
+Fast redraw without flicker
+
+
+The C64 game also supports paddles/mouse and feels much better with analog-like control, which is part of why joystick versions often feel harsher.  For TIKI-100, even if you use digital input, you should try to simulate a responsive, low-latency paddle.
+
+Suggested implementation model for TIKI-100
+1. Decide the gameplay target
+Do not start by cloning every detail. Define three targets:
+Phase A: Playable core
+
+
+Paddle
+
+
+Single ball
+
+
+Normal bricks
+
+
+Wall collision
+
+
+Lose life
+
+
+Clear stage
+
+
+Multiple stages
+
+
+Phase B: Arkanoid behavior
+
+
+Angle zones on paddle
+
+
+Silver / indestructible bricks
+
+
+Stage transitions
+
+
+Score, lives, extra life
+
+
+Enlarge / Slow / Catch / Laser / 3-ball / Break / Player capsules
+
+
+Enemies as interference
+
+
+Phase C: C64 polish
+
+
+Speed curve
+
+
+Visual style
+
+
+Sound timing
+
+
+Stage data matching
+
+
+Boss stage
+
+
+Menu and intro flow
+
+
+That keeps the project under control.
+
+Recommended C + assembly split
+For a Z80 machine, a good split is:
+In C
+Use C for:
+
+
+game state
+
+
+stage data
+
+
+object structs
+
+
+high-level update loop
+
+
+menu / UI logic
+
+
+score and lives
+
+
+power-up state machine
+
+
+stage scripting
+
+
+In assembly
+Use assembly for:
+
+
+sprite/tile blitting
+
+
+rectangle fills
+
+
+collision helper inner loops if needed
+
+
+ball movement stepper
+
+
+input polling
+
+
+fast redraw / dirty rectangle handling
+
+
+sound effects
+
+
+That gives you maintainability without sacrificing frame rate.
+
+Game systems to build
+2. Represent the playfield
+Use a brick grid, not pixel-perfect level data.
+Example logical grid:
+
+
+13 columns × 16 rows
+
+
+each brick cell stores:
+
+
+type
+
+
+hit points
+
+
+score value
+
+
+capsule id or none
+
+
+
+
+Suggested brick enum:
+typedef enum{    BRICK_EMPTY = 0,    BRICK_NORMAL_1,    BRICK_NORMAL_2,    BRICK_NORMAL_3,    BRICK_NORMAL_4,    BRICK_NORMAL_5,    BRICK_NORMAL_6,    BRICK_NORMAL_7,    BRICK_NORMAL_8,    BRICK_SILVER,    BRICK_GOLD} BrickType;
+Then keep a separate hit counter for silver bricks if needed.
+3. Core objects
+You need:
+Paddle
+
+
+x position
+
+
+width/state
+
+
+mode: normal / enlarged / laser / catch
+
+
+movement velocity or step value
+
+
+Ball
+
+
+x, y
+
+
+dx, dy
+
+
+speed
+
+
+active flag
+
+
+stuck-to-paddle flag
+
+
+Capsule
+
+
+x, y
+
+
+type
+
+
+falling state
+
+
+Enemies
+
+
+x, y
+
+
+motion pattern
+
+
+active flag
+
+
+Game state
+
+
+score
+
+
+lives
+
+
+current stage
+
+
+bricks remaining
+
+
+balls in play
+
+
+active power-up
+
+
+timer counters
+
+
+
+Collision design
+4. Ball physics
+Do not implement free-angle physics. Arkanoid feels better with a controlled set of rebound angles.
+Use fixed-point movement, for example:
+
+
+x, y in 8.8 fixed point
+
+
+dx, dy as signed 8.8 vectors
+
+
+Recommended bounce model
+Divide paddle into 5 zones:
+
+
+far left → shallow left
+
+
+left center → medium left
+
+
+center → steep upward
+
+
+right center → medium right
+
+
+far right → shallow right
+
+
+That is closer to arcade logic than real physics, and easier to tune.
+Important rule
+When the ball hits:
+
+
+walls: invert dx
+
+
+ceiling: invert dy
+
+
+brick: determine whether horizontal or vertical side hit dominates, then invert appropriate axis
+
+
+paddle: assign new dx/dy from paddle zone table
+
+
+This is much more stable than trying to “simulate” real reflection.
+
+Rendering strategy
+5. Use a static playfield plus dynamic objects
+Since Arkanoid has a mostly static background:
+
+
+draw full level once
+
+
+erase/redraw only changed bricks
+
+
+redraw paddle, balls, capsules, enemies each frame
+
+
+use dirty rectangles or XOR-free redraw logic
+
+
+This is a very good fit for an 8-bit machine.
+Suggested layers:
+
+
+background / border
+
+
+brick field
+
+
+HUD
+
+
+moving objects
+
+
+
+Level format
+6. Build a compact stage data format
+Store stage data as compressed rows.
+Example:
+typedef struct{    uint8_t m_brickType;    uint8_t m_capsuleType;} BrickCell;
+But for storage, compress it more tightly:
+
+
+4 bits brick type
+
+
+4 bits capsule type
+
+
+Then unpack into RAM when loading stage.
+If memory gets tight, keep:
+
+
+packed stage ROM data
+
+
+unpacked active stage RAM grid
+
+
+
+Power-up implementation order
+7. Implement capsules in this order
+Build them in the order that helps gameplay testing most:
+
+
+E enlarge
+
+
+S slow
+
+
+P extra life
+
+
+C catch
+
+
+L laser
+
+
+D disruption
+
+
+B break
+
+
+Why this order:
+
+
+first three are simplest
+
+
+catch changes launch behavior
+
+
+laser introduces shots
+
+
+disruption introduces multiple balls
+
+
+break requires stage exit logic
+
+
+Notes
+
+
+Only one main paddle mode should usually be active at once, except extra life which is instantaneous.
+
+
+Losing the ball should clear most temporary paddle powers. StrategyWiki notes that power-up effects last until another power-up is collected or the current ball is lost. 
+
+
+
+Level progression and difficulty
+8. Difficulty model for your version
+Even if you cannot match the original exactly at first, use this progression:
+Early stages
+
+
+simple walls
+
+
+fewer silver bricks
+
+
+slower starting ball
+
+
+Mid stages
+
+
+more narrow channels
+
+
+more gold blockers
+
+
+more silver bricks
+
+
+more awkward returns
+
+
+Late stages
+
+
+dense layouts
+
+
+more forced side rebounds
+
+
+faster ball acceleration
+
+
+higher enemy interference
+
+
+You should also increase silver-brick toughness with stage number, as the original progression does. 
+
+Concrete development plan
+9. Step-by-step build plan
+Milestone 1: Engine skeleton
+
+
+set video mode
+
+
+draw playfield border
+
+
+draw paddle
+
+
+draw one ball
+
+
+basic input
+
+
+50/60 Hz main loop
+
+
+fixed timestep update
+
+
+Milestone 2: Ball and wall physics
+
+
+launch ball from paddle
+
+
+bounce on walls and ceiling
+
+
+lose life at bottom
+
+
+respawn ball attached to paddle
+
+
+Milestone 3: Brick grid
+
+
+brick map in RAM
+
+
+collision with bricks
+
+
+brick removal
+
+
+score update
+
+
+stage-clear detection
+
+
+Milestone 4: Paddle angle control
+
+
+paddle hit zones
+
+
+proper rebound table
+
+
+tune until it feels right
+
+
+Milestone 5: Stage system
+
+
+load stage data
+
+
+show stage number
+
+
+transition to next level
+
+
+handle 32 stages + placeholder final stage
+
+
+Milestone 6: Capsules
+
+
+falling object system
+
+
+collection detection
+
+
+implement E/S/P first
+
+
+then C/L/D/B
+
+
+Milestone 7: Multi-ball and laser
+
+
+small object pool for up to 3 balls
+
+
+laser shot pool
+
+
+independent updates
+
+
+collision with bricks/enemies
+
+
+Milestone 8: Enemies
+
+
+simple descending enemies
+
+
+ball/enemy interaction
+
+
+optional points bonus
+
+
+Milestone 9: UI and scoring
+
+
+score
+
+
+lives
+
+
+extra life every 20,000
+
+
+ready / game over / stage clear
+
+
+Milestone 10: Boss and polish
+
+
+final boss logic
+
+
+title screen
+
+
+sound effects
+
+
+better graphics
+
+
+C64-like pacing
+
+
+
+Suggested code architecture
+10. Source file layout
+main.cgame.cgame.hvideo.cvideo_asm.asminput.cinput_asm.asmball.cpaddle.cbricks.ccapsules.cenemies.cstages.cscore.csound.cdata_stages.cdata_graphics.c
+Keep these update functions separate
+
+
+UpdatePaddle()
+
+
+UpdateBalls()
+
+
+UpdateCapsules()
+
+
+UpdateEnemies()
+
+
+CheckBrickCollision()
+
+
+RenderFrame()
+
+
+This will help a lot once you add multi-ball and laser.
+
+Practical simplifications for first version
+11. What to fake initially
+To get a good result sooner, first version can simplify:
+
+
+no sub-pixel sprite graphics, only sub-pixel logic
+
+
+no enemies at first
+
+
+no boss at first
+
+
+no exact original stage order at first
+
+
+only 1-player mode
+
+
+no analog paddle support initially
+
+
+That still gets you a strong Arkanoid.
+
+Tuning priorities
+12. The three things to tune hardest
+If you want it to feel right, spend most time on:
+
+
+paddle movement latency
+
+
+ball rebound table
+
+
+collision stability around brick corners
+
+
+Those three will determine whether it feels “real” or homemade.
+
+Recommendation for your project
+For TIKI-100, I would implement it in this order:
+
+
+C game framework
+
+
+assembly blitter
+
+
+single-ball Arkanoid loop
+
+
+brick maps
+
+
+power-ups
+
+
+multi-ball / laser
+
+
+boss / polish
+
+
+That gives the best risk control.
+Minimal first target
+A very solid first target would be:
+
+
+13×16 brick grid
+
+
+paddle with 5 bounce zones
+
+
+1 ball
+
+
+5 lives
+
+
+32 stages
+
+
+normal, silver, gold bricks
+
+
+E/S/C/L/D/B/P capsules
+
+
+score and extra life
+
+
+That is already recognizably Arkanoid and close to the C64 version in play structure. 
+If you want, I can next make you a TIKI-100 specific technical design, with:
+
+
+memory layout,
+
+
+C structs,
+
+
+update loop,
+
+
+fixed-point ball code,
+
+
+and a compact stage format ready to implement.
+
+

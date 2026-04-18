@@ -1,0 +1,17 @@
+_g_sound_on                     = $0000 ; addr, global, , , data_compiler, C:\code\TikiArkanoid\src\c\sound.c:14
+_s_intro                        = $0000 ; addr, local, , , rodata_compiler, C:\code\TikiArkanoid\src\c\sound.c::sfx_launch::0::6:88
+_sfx_bounce                     = $0026 ; addr, global, , , code_compiler, C:\code\TikiArkanoid\src\c\sound.c::sfx_bounce::0::2:26
+_sfx_brick                      = $005C ; addr, global, , , code_compiler, C:\code\TikiArkanoid\src\c\sound.c::sfx_brick::0::3:36
+_sfx_launch                     = $00EF ; addr, global, , , code_compiler, C:\code\TikiArkanoid\src\c\sound.c::sfx_launch::0::5:60
+_sfx_lose_life                  = $00A5 ; addr, global, , , code_compiler, C:\code\TikiArkanoid\src\c\sound.c::sfx_lose_life::0::4:48
+_sfx_stage_intro                = $0125 ; addr, global, , , code_compiler, C:\code\TikiArkanoid\src\c\sound.c::sfx_stage_intro::0::6:101
+_sound_init                     = $0000 ; addr, global, , , code_compiler, C:\code\TikiArkanoid\src\c\sound.c::sound_init::0::0:16
+_sound_off                      = $0004 ; addr, global, , , code_compiler, C:\code\TikiArkanoid\src\c\sound.c::sound_off::0::1:19
+i_10                            = $01C4 ; addr, local, , , code_compiler, C:\code\TikiArkanoid\src\c\sound.c::sfx_stage_intro::0::6:101
+i_11                            = $0149 ; addr, local, , , code_compiler, C:\code\TikiArkanoid\src\c\sound.c::sfx_stage_intro::0::6:101
+i_3                             = $002E ; addr, local, , , code_compiler, C:\code\TikiArkanoid\src\c\sound.c::sfx_bounce::0::2:26
+i_4                             = $0064 ; addr, local, , , code_compiler, C:\code\TikiArkanoid\src\c\sound.c::sfx_brick::0::3:36
+i_5                             = $00AD ; addr, local, , , code_compiler, C:\code\TikiArkanoid\src\c\sound.c::sfx_lose_life::0::4:48
+i_6                             = $00F7 ; addr, local, , , code_compiler, C:\code\TikiArkanoid\src\c\sound.c::sfx_launch::0::5:60
+i_8                             = $012F ; addr, local, , , code_compiler, C:\code\TikiArkanoid\src\c\sound.c::sfx_stage_intro::0::6:101
+i_9                             = $0144 ; addr, local, , , code_compiler, C:\code\TikiArkanoid\src\c\sound.c::sfx_stage_intro::0::6:101

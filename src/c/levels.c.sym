@@ -1,0 +1,5 @@
+_levels                         = $0251 ; addr, global, , , rodata_compiler, C:\code\TikiArkanoid\src\c\levels.c:72
+_lvl1                           = $0000 ; addr, local, , , rodata_compiler, C:\code\TikiArkanoid\src\c\levels.c:8
+_lvl2                           = $005D ; addr, local, , , rodata_compiler, C:\code\TikiArkanoid\src\c\levels.c:20
+_lvl3                           = $0108 ; addr, local, , , rodata_compiler, C:\code\TikiArkanoid\src\c\levels.c:38
+_lvl4                           = $01B3 ; addr, local, , , rodata_compiler, C:\code\TikiArkanoid\src\c\levels.c:56
