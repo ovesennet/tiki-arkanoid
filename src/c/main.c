@@ -283,7 +283,7 @@ int main(void)
             do { input_poll(); } while (input_held(KBIT_PAUSE));
             /* Wait for any key press */
             wait_key();
-            vid_fill_rect(SIDE_X, SIDE_Y + 78, 50, FONT_CH, COL_BLACK);
+            vid_fill_rect(SIDE_X, SIDE_Y + 78, 36, FONT_CH, COL_BLACK);
             /* Wait for that key to be released */
             do { input_poll(); } while (input_any());
             input_flush();
@@ -321,6 +321,7 @@ int main(void)
             game_init();
             game_draw_playfield();
             game_draw_sidebar_labels();
+            game_draw_paddle_force();
             sfx_stage_intro();
         }
 

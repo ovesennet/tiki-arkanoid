@@ -20,6 +20,8 @@ uint8_t  g_paddle_w;
 Ball     g_ball;
 uint8_t  g_bricks_left;
 uint8_t  g_dirty;
+Capsule  g_capsule;
+uint8_t  g_paddle_mode;
 
 /* Previous paddle position for delta redraw */
 static uint16_t s_prev_paddle_x;
@@ -27,6 +29,50 @@ static uint16_t s_prev_paddle_x;
 /* Previous ball position for flicker-free move */
 static uint16_t s_prev_ball_x;
 static uint16_t s_prev_ball_y;
+
+/* ── Simple PRNG (xorshift8) ── */
+static uint8_t s_rng = 0x5A;
+
+static uint8_t rng_next(void)
+{
+    s_rng ^= (s_rng << 3);
+    s_rng ^= (s_rng >> 5);
+    s_rng ^= (s_rng << 4);
+    return s_rng;
+}
+
+/* Random number in range [lo..hi] inclusive */
+static uint8_t rng_range(uint8_t lo, uint8_t hi)
+{
+    return lo + (rng_next() % (hi - lo + 1));
+}
+
+/* ── Capsule state ── */
+static uint8_t s_bricks_until_cap;  /* bricks to break before next capsule */
+static uint16_t s_prev_cap_x;       /* previous capsule draw position */
+static uint16_t s_prev_cap_y;
+
+/* Capsule colour per type (background colour of capsule) */
+static const uint8_t cap_colour[] = {
+    COL_BLACK,    /* 0: none */
+    COL_ORANGE,   /* 1: S slow */
+    COL_GREEN,    /* 2: C catch */
+    COL_BLUE,     /* 3: E enlarge */
+    COL_RED,      /* 4: D disruption */
+    COL_LTGREY,   /* 5: L laser */
+    COL_BRCYAN,   /* 6: B break */
+    COL_MAGENTA,  /* 7: P player */
+};
+
+/* Letter per capsule type */
+static const char cap_letter[] = {
+    ' ', 'S', 'C', 'E', 'D', 'L', 'B', 'P'
+};
+
+static void capsule_reset_counter(void)
+{
+    s_bricks_until_cap = rng_range(7, 15);
+}
 
 /* Brick colour lookup (index = brick type) */
 static const uint8_t brick_colour[] = {
@@ -78,6 +124,9 @@ void game_init(void)
     g_paddle_w = PADDLE_W;
     g_paddle_x = (PF_LEFT + PF_WIDTH / 2) - (g_paddle_w / 2);
     s_prev_paddle_x = g_paddle_x;
+    g_paddle_mode = PMODE_NORMAL;
+    g_capsule.type = CAP_NONE;
+    capsule_reset_counter();
     g_dirty = DIRTY_ALL;
     game_load_stage(1);
     game_reset_ball();
@@ -90,6 +139,10 @@ void game_load_stage(uint8_t stage)
 
     memset(g_bricks, BRK_EMPTY, sizeof(g_bricks));
     g_bricks_left = 0;
+    g_capsule.type = CAP_NONE;
+    g_paddle_mode = PMODE_NORMAL;
+    g_paddle_w = PADDLE_W;
+    capsule_reset_counter();
 
     if (stage < 1) stage = 1;
     if (stage > NUM_LEVELS) stage = NUM_LEVELS;
@@ -136,12 +189,17 @@ void game_draw_brick(uint8_t row, uint8_t col)
     uint16_t py = GRID_TOP  + (uint16_t)row * BRICK_H;
 
     if (b == BRK_EMPTY) {
-        vid_fill_rect(px, py, BRICK_W - 1, BRICK_H - 1, COL_BLACK);
+        vid_fill_rect(px, py, BRICK_W, BRICK_H, COL_BLACK);
     } else {
         uint8_t c = brick_colour[b];
-        vid_fill_rect(px, py, BRICK_W - 1, BRICK_H - 1, c);
+        /* Draw 14x7 visible area, leave 2px right + 1px bottom as black border */
+        vid_fill_rect(px, py, BRICK_W - 2, BRICK_H - 1, c);
+        /* Black right border (2px) */
+        vid_fill_rect(px + BRICK_W - 2, py, 2, BRICK_H, COL_BLACK);
+        /* Black bottom border (1px) */
+        vid_hline(px, px + BRICK_W - 3, py + BRICK_H - 1, COL_BLACK);
         if (b == BRK_SILVER || b == BRK_GOLD) {
-            vid_hline(px, px + BRICK_W - 2, py, COL_WHITE);
+            vid_hline(px, px + BRICK_W - 3, py, COL_WHITE);
             vid_vline(px, py, py + BRICK_H - 2, COL_WHITE);
         }
     }
@@ -161,11 +219,23 @@ void game_draw_playfield(void)
                 game_draw_brick(r, c);
 }
 
+/* Paddle body colour based on current mode */
+static uint8_t paddle_colour(void)
+{
+    switch (g_paddle_mode) {
+    case PMODE_CATCH:   return COL_GREEN;
+    case PMODE_LASER:   return COL_RED;
+    case PMODE_ENLARGE: return COL_BLUE;
+    default:            return COL_BRCYAN;
+    }
+}
+
 void game_draw_paddle(void)
 {
     uint16_t old_x = s_prev_paddle_x;
     uint16_t new_x = g_paddle_x;
     uint8_t w = g_paddle_w;
+    uint8_t pc = paddle_colour();
 
     if (old_x == new_x) return;
 
@@ -173,12 +243,12 @@ void game_draw_paddle(void)
         /* Moved right: erase left strip, draw right strip */
         uint8_t strip = (uint8_t)(new_x - old_x);
         vid_fill_rect(old_x, PADDLE_Y, strip, PADDLE_H, COL_BLACK);
-        vid_fill_rect(old_x + w, PADDLE_Y, strip, PADDLE_H, COL_BRCYAN);
+        vid_fill_rect(old_x + w, PADDLE_Y, strip, PADDLE_H, pc);
     } else {
         /* Moved left: erase right strip, draw left strip */
         uint8_t strip = (uint8_t)(old_x - new_x);
         vid_fill_rect(old_x + w - strip, PADDLE_Y, strip, PADDLE_H, COL_BLACK);
-        vid_fill_rect(new_x, PADDLE_Y, strip, PADDLE_H, COL_BRCYAN);
+        vid_fill_rect(new_x, PADDLE_Y, strip, PADDLE_H, pc);
     }
     /* Redraw highlight on top row */
     vid_hline(new_x, new_x + w - 1, PADDLE_Y, COL_WHITE);
@@ -188,7 +258,8 @@ void game_draw_paddle(void)
 
 void game_draw_paddle_force(void)
 {
-    vid_fill_rect(g_paddle_x, PADDLE_Y, g_paddle_w, PADDLE_H, COL_BRCYAN);
+    uint8_t pc = paddle_colour();
+    vid_fill_rect(g_paddle_x, PADDLE_Y, g_paddle_w, PADDLE_H, pc);
     vid_hline(g_paddle_x, g_paddle_x + g_paddle_w - 1, PADDLE_Y, COL_WHITE);
     s_prev_paddle_x = g_paddle_x;
 }
@@ -233,7 +304,7 @@ void game_draw_sidebar_values(void)
 
     if (g_dirty & DIRTY_SCORE) {
         u32_to_str(g_score, buf);
-        vid_fill_rect(SIDE_X, SIDE_Y + 10, 50, FONT_CH, COL_BLACK);
+        vid_fill_rect(SIDE_X, SIDE_Y + 10, 36, FONT_CH, COL_BLACK);
         draw_text(SIDE_X, SIDE_Y + 10, buf, COL_YELLOW);
     }
     if (g_dirty & DIRTY_LIVES) {
@@ -255,7 +326,7 @@ static void flash_brick(uint8_t r, uint8_t c)
 {
     uint16_t px = GRID_LEFT + (uint16_t)c * BRICK_W;
     uint16_t py = GRID_TOP  + (uint16_t)r * BRICK_H;
-    vid_fill_rect(px, py, BRICK_W - 1, BRICK_H - 1, COL_WHITE);
+    vid_fill_rect(px, py, BRICK_W - 2, BRICK_H - 1, COL_WHITE);
     delay(60);
     game_draw_brick(r, c);
 }
@@ -283,6 +354,127 @@ static void hit_brick(uint8_t r, uint8_t c)
     g_bricks_left--;
     game_draw_brick(r, c);
     sfx_brick();
+
+    /* Capsule spawn check — only from normal (non-silver) bricks */
+    if (g_capsule.type == CAP_NONE) {
+        if (s_bricks_until_cap > 0)
+            s_bricks_until_cap--;
+        if (s_bricks_until_cap == 0) {
+            /* Spawn a random capsule at the destroyed brick's position */
+            g_capsule.type = rng_range(1, NUM_CAP_TYPES - 1);
+            g_capsule.x = GRID_LEFT + (uint16_t)c * BRICK_W;
+            g_capsule.y = GRID_TOP + (uint16_t)r * BRICK_H;
+            s_prev_cap_x = g_capsule.x;
+            s_prev_cap_y = g_capsule.y;
+            capsule_reset_counter();
+        }
+    }
+}
+
+/* ── Capsule drawing ── */
+
+static void capsule_draw(uint16_t x, uint16_t y, uint8_t type)
+{
+    uint8_t col = cap_colour[type];
+    char letter[2];
+    vid_fill_rect(x, y, CAP_W, CAP_H, col);
+    /* Draw letter centred in capsule */
+    letter[0] = cap_letter[type];
+    letter[1] = '\0';
+    draw_text(x + 3, y, letter, COL_WHITE);
+}
+
+static void capsule_erase(uint16_t x, uint16_t y)
+{
+    vid_fill_rect(x, y, CAP_W, CAP_H, COL_BLACK);
+}
+
+static void capsule_apply(uint8_t type)
+{
+    sfx_bounce();  /* audible feedback for any pickup */
+    switch (type) {
+    case CAP_SLOW:
+        /* Reduce ball speed */
+        if (g_ball.dy < -1) g_ball.dy = -1;
+        else if (g_ball.dy > 1) g_ball.dy = 1;
+        if (g_ball.dx < -1) g_ball.dx = -1;
+        else if (g_ball.dx > 1) g_ball.dx = 1;
+        g_paddle_mode = PMODE_NORMAL;
+        goto redraw_paddle;
+    case CAP_ENLARGE:
+        g_paddle_mode = PMODE_ENLARGE;
+        /* Erase old paddle, widen, redraw */
+        vid_fill_rect(g_paddle_x, PADDLE_Y, g_paddle_w, PADDLE_H, COL_BLACK);
+        g_paddle_w = PADDLE_WIDE_W;
+        /* Clamp paddle position */
+        if (g_paddle_x + g_paddle_w > PADDLE_MAX_X)
+            g_paddle_x = PADDLE_MAX_X - g_paddle_w;
+        s_prev_paddle_x = g_paddle_x;
+        game_draw_paddle_force();
+        break;
+    case CAP_PLAYER:
+        g_lives++;
+        g_dirty |= DIRTY_LIVES;
+        break;
+    case CAP_CATCH:
+        g_paddle_mode = PMODE_CATCH;
+        goto redraw_paddle;
+    case CAP_LASER:
+        g_paddle_mode = PMODE_LASER;
+        goto redraw_paddle;
+    case CAP_DISRUPT:
+        /* TODO: multi-ball */
+        break;
+    case CAP_BREAK:
+        /* TODO: stage exit */
+        break;
+    }
+    return;
+redraw_paddle:
+    /* Redraw paddle in new mode colour */
+    vid_fill_rect(g_paddle_x, PADDLE_Y, g_paddle_w, PADDLE_H, COL_BLACK);
+    game_draw_paddle_force();
+}
+
+void game_update_capsule(void)
+{
+    if (g_capsule.type == CAP_NONE) return;
+
+    /* Erase at previous position */
+    capsule_erase(s_prev_cap_x, s_prev_cap_y);
+
+    /* Move down */
+    g_capsule.y += CAP_FALL_SPEED;
+
+    /* Off-screen? */
+    if (g_capsule.y >= PF_BOTTOM) {
+        capsule_erase(s_prev_cap_x, s_prev_cap_y);
+        g_capsule.type = CAP_NONE;
+        return;
+    }
+
+    /* Paddle collision? */
+    if (g_capsule.y + CAP_H >= PADDLE_Y &&
+        g_capsule.y < PADDLE_Y + PADDLE_H &&
+        g_capsule.x + CAP_W >= g_paddle_x &&
+        g_capsule.x <= g_paddle_x + g_paddle_w) {
+        /* Erase capsule at both previous and current positions */
+        capsule_erase(s_prev_cap_x, s_prev_cap_y);
+        capsule_erase(g_capsule.x, g_capsule.y);
+        /* Clear any pixels that leaked below the paddle */
+        vid_fill_rect(g_capsule.x, PADDLE_Y + PADDLE_H,
+                      CAP_W, CAP_H, COL_BLACK);
+        capsule_apply(g_capsule.type);
+        /* Redraw paddle in case capsule erase damaged it */
+        game_draw_paddle_force();
+        g_capsule.type = CAP_NONE;
+        return;
+    }
+
+    /* Draw at new position */
+    capsule_draw(g_capsule.x, g_capsule.y, g_capsule.type);
+    s_prev_cap_x = g_capsule.x;
+    s_prev_cap_y = g_capsule.y;
 }
 
 /* ── Update ── */
@@ -292,6 +484,9 @@ void game_update(void)
     int16_t nx, ny, bx, by;
     int16_t cx, ty;
     uint8_t gr, gc;
+
+    /* Update falling capsule */
+    game_update_capsule();
 
     if (!g_ball.active) {
         g_ball.x = g_paddle_x + g_paddle_w / 2;
@@ -327,6 +522,17 @@ void game_update(void)
         g_ball.active = 0;
         g_lives--;
         g_dirty |= DIRTY_LIVES;
+        /* Reset paddle to normal on death */
+        if (g_paddle_mode == PMODE_ENLARGE) {
+            vid_fill_rect(g_paddle_x, PADDLE_Y, g_paddle_w, PADDLE_H, COL_BLACK);
+            g_paddle_w = PADDLE_W;
+        }
+        g_paddle_mode = PMODE_NORMAL;
+        /* Erase any active capsule */
+        if (g_capsule.type != CAP_NONE) {
+            capsule_erase(s_prev_cap_x, s_prev_cap_y);
+            g_capsule.type = CAP_NONE;
+        }
         sfx_lose_life();
         if (g_lives == 0) {
             g_state = STATE_GAMEOVER;
@@ -351,6 +557,11 @@ void game_update(void)
             else if (hit < pw * 4 / 5) g_ball.dx = 1;
             else                        g_ball.dx = 2;
             sfx_bounce();
+            /* Catch mode: ball sticks to paddle */
+            if (g_paddle_mode == PMODE_CATCH) {
+                g_ball.active = 0;
+                g_state = STATE_LAUNCH;
+            }
         }
     }
 

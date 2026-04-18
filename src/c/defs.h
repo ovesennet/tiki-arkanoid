@@ -13,24 +13,24 @@
 
 /* ── Playfield layout (C64-style: left portion of screen) ─── */
 /* Playfield area in pixels (bricks + ball area) */
-#define PF_LEFT        32     /* playfield left edge */
+#define PF_LEFT        4      /* playfield left edge */
 #define PF_TOP         16     /* playfield top edge */
-#define PF_WIDTH       160    /* 13 bricks * 12px + 4px walls */
+#define PF_WIDTH       212    /* 13 bricks * 16px + 4px walls */
 #define PF_BOTTOM      240    /* death line */
 
 /* Brick grid */
 #define BRICK_COLS     13
-#define BRICK_ROWS     18     /* max rows in a stage */
-#define BRICK_W        12     /* pixels wide */
-#define BRICK_H        6      /* pixels tall */
+#define BRICK_ROWS     24     /* max rows in a stage */
+#define BRICK_W        16     /* pixels wide (14 visible + 2px right border) */
+#define BRICK_H        8      /* pixels tall (7 visible + 1px bottom border) */
 #define GRID_LEFT      (PF_LEFT + 2)
 #define GRID_TOP       (PF_TOP + 2)
 
 /* Paddle */
 #define PADDLE_Y       230
-#define PADDLE_W       24     /* normal width */
+#define PADDLE_W       28     /* normal width */
 #define PADDLE_H       4
-#define PADDLE_WIDE_W  36     /* enlarged */
+#define PADDLE_WIDE_W  42     /* enlarged */
 #define PADDLE_MIN_X   (PF_LEFT + 2)
 #define PADDLE_MAX_X   (PF_LEFT + PF_WIDTH - 2)
 #define PADDLE_SPEED   4
@@ -40,7 +40,7 @@
 #define BALL_SPEED_INIT 2     /* initial speed (8.8 fixed = 0x0200) */
 
 /* Sidebar info area */
-#define SIDE_X         200
+#define SIDE_X         220
 #define SIDE_Y         16
 
 /* ── Brick types ───────────────────────────────────────── */
@@ -91,5 +91,43 @@
 /* ── Scoring ───────────────────────────────────────────── */
 #define START_LIVES    5
 #define EXTRA_LIFE_PTS 20000UL
+
+/* ── Power-up capsule types ────────────────────────────── */
+#define CAP_NONE       0
+#define CAP_SLOW       1   /* S — slow ball */
+#define CAP_CATCH      2   /* C — catch & relaunch */
+#define CAP_ENLARGE    3   /* E — widen paddle */
+#define CAP_DISRUPT    4   /* D — 3 balls */
+#define CAP_LASER      5   /* L — paddle shoots */
+#define CAP_BREAK      6   /* B — skip stage */
+#define CAP_PLAYER     7   /* P — extra life */
+#define NUM_CAP_TYPES  8
+
+/* Capsule visual */
+#define CAP_W          10    /* pixels wide */
+#define CAP_H          6     /* pixels tall */
+#define CAP_FALL_SPEED 1     /* pixels per frame */
+
+/* ── Paddle mode (active power-up) ─────────────────────── */
+#define PMODE_NORMAL   0
+#define PMODE_CATCH    1
+#define PMODE_LASER    2
+#define PMODE_ENLARGE  3
+
+/* ── Capsule struct ────────────────────────────────────── */
+typedef struct {
+    uint8_t  type;     /* CAP_xxx, 0 = inactive */
+    uint16_t x;        /* pixel x */
+    uint16_t y;        /* pixel y */
+} Capsule;
+
+/* ── Multi-ball (for Disruption) ───────────────────────── */
+#define MAX_BALLS      3
+
+typedef struct {
+    uint8_t  active;
+    uint16_t x, y;
+    int8_t   dx, dy;
+} Ball;
 
 #endif /* DEFS_H */

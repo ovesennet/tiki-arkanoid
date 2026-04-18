@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define NUM_LEVELS     32
-#define LEVEL_ROWS     18
+#define LEVEL_ROWS     24
 #define LEVEL_COLS     13
 
 /* Each level is stored as: start_row (1 byte), num_rows (1 byte),
