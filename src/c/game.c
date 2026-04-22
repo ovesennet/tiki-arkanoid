@@ -7,6 +7,7 @@
 #include "video.h"
 #include "font.h"
 #include "sound.h"
+#include "enemy.h"
 #include <string.h>
 
 /* ── State ── */
@@ -25,6 +26,7 @@ uint8_t  g_paddle_mode;
 
 /* Previous paddle position for delta redraw */
 static uint16_t s_prev_paddle_x;
+static uint8_t  s_prev_paddle_w;
 
 /* Previous ball position for flicker-free move */
 static uint16_t s_prev_ball_x;
@@ -86,7 +88,7 @@ static const uint8_t brick_colour[] = {
     COL_MAGENTA,  /* 7 */
     COL_WHITE,    /* 8 */
     COL_LTGREY,   /* 9: silver */
-    COL_BRCYAN,   /* 10: gold (indestructible, light blue) */
+    COL_CYAN,     /* 10: gold (indestructible, dark cyan) */
 };
 
 /* Score per brick type */
@@ -124,10 +126,12 @@ void game_init(void)
     g_paddle_w = PADDLE_W;
     g_paddle_x = (PF_LEFT + PF_WIDTH / 2) - (g_paddle_w / 2);
     s_prev_paddle_x = g_paddle_x;
+    s_prev_paddle_w = g_paddle_w;
     g_paddle_mode = PMODE_NORMAL;
     g_capsule.type = CAP_NONE;
     capsule_reset_counter();
     g_dirty = DIRTY_ALL;
+    enemy_init();
     game_load_stage(1);
     game_reset_ball();
 }
@@ -143,9 +147,10 @@ void game_load_stage(uint8_t stage)
     g_paddle_mode = PMODE_NORMAL;
     g_paddle_w = PADDLE_W;
     capsule_reset_counter();
+    enemy_reset();
 
     if (stage < 1) stage = 1;
-    if (stage > NUM_LEVELS) stage = NUM_LEVELS;
+    if (stage > NUM_LEVELS) stage = ((stage - 1) % NUM_LEVELS) + 1;
     src = levels[stage - 1];
     {
         uint8_t start_row = *src++;
@@ -230,38 +235,30 @@ static uint8_t paddle_colour(void)
     }
 }
 
+/* Flicker-free paddle: full erase + full redraw in single VRAM bank switch. */
 void game_draw_paddle(void)
 {
     uint16_t old_x = s_prev_paddle_x;
     uint16_t new_x = g_paddle_x;
+    uint8_t old_w = s_prev_paddle_w;
     uint8_t w = g_paddle_w;
     uint8_t pc = paddle_colour();
 
-    if (old_x == new_x) return;
+    if (old_x == new_x && old_w == w) return;
 
-    if (new_x > old_x) {
-        /* Moved right: erase left strip, draw right strip */
-        uint8_t strip = (uint8_t)(new_x - old_x);
-        vid_fill_rect(old_x, PADDLE_Y, strip, PADDLE_H, COL_BLACK);
-        vid_fill_rect(old_x + w, PADDLE_Y, strip, PADDLE_H, pc);
-    } else {
-        /* Moved left: erase right strip, draw left strip */
-        uint8_t strip = (uint8_t)(old_x - new_x);
-        vid_fill_rect(old_x + w - strip, PADDLE_Y, strip, PADDLE_H, COL_BLACK);
-        vid_fill_rect(new_x, PADDLE_Y, strip, PADDLE_H, pc);
-    }
-    /* Redraw highlight on top row */
-    vid_hline(new_x, new_x + w - 1, PADDLE_Y, COL_WHITE);
+    vid_move_paddle(old_x, new_x, old_w, w, PADDLE_H, PADDLE_Y, pc);
 
     s_prev_paddle_x = new_x;
+    s_prev_paddle_w = w;
 }
 
 void game_draw_paddle_force(void)
 {
     uint8_t pc = paddle_colour();
-    vid_fill_rect(g_paddle_x, PADDLE_Y, g_paddle_w, PADDLE_H, pc);
     vid_hline(g_paddle_x, g_paddle_x + g_paddle_w - 1, PADDLE_Y, COL_WHITE);
+    vid_fill_rect(g_paddle_x, PADDLE_Y + 1, g_paddle_w, PADDLE_H - 1, pc);
     s_prev_paddle_x = g_paddle_x;
+    s_prev_paddle_w = g_paddle_w;
 }
 
 void game_erase_ball(void)
@@ -386,7 +383,7 @@ static void capsule_draw(uint16_t x, uint16_t y, uint8_t type)
 
 static void capsule_erase(uint16_t x, uint16_t y)
 {
-    vid_fill_rect(x, y, CAP_W, CAP_H, COL_BLACK);
+    vid_fill_rect(x, y, CAP_W, FONT_CH, COL_BLACK);
 }
 
 static void capsule_apply(uint8_t type)
@@ -431,17 +428,19 @@ static void capsule_apply(uint8_t type)
     }
     return;
 redraw_paddle:
-    /* Redraw paddle in new mode colour */
+    /* Erase old (possibly wide) paddle, reset width if leaving enlarge */
     vid_fill_rect(g_paddle_x, PADDLE_Y, g_paddle_w, PADDLE_H, COL_BLACK);
+    if (g_paddle_mode != PMODE_ENLARGE)
+        g_paddle_w = PADDLE_W;
     game_draw_paddle_force();
 }
 
 void game_update_capsule(void)
 {
-    if (g_capsule.type == CAP_NONE) return;
+    uint8_t col;
+    char letter[2];
 
-    /* Erase at previous position */
-    capsule_erase(s_prev_cap_x, s_prev_cap_y);
+    if (g_capsule.type == CAP_NONE) return;
 
     /* Move down */
     g_capsule.y += CAP_FALL_SPEED;
@@ -464,15 +463,28 @@ void game_update_capsule(void)
         /* Clear any pixels that leaked below the paddle */
         vid_fill_rect(g_capsule.x, PADDLE_Y + PADDLE_H,
                       CAP_W, CAP_H, COL_BLACK);
+        /* Erase full paddle area before apply (capsule erase may
+           have punched holes in the paddle body) */
+        vid_fill_rect(s_prev_paddle_x, PADDLE_Y,
+                      s_prev_paddle_w, PADDLE_H, COL_BLACK);
         capsule_apply(g_capsule.type);
-        /* Redraw paddle in case capsule erase damaged it */
+        /* Full redraw at current position */
         game_draw_paddle_force();
         g_capsule.type = CAP_NONE;
         return;
     }
 
-    /* Draw at new position */
-    capsule_draw(g_capsule.x, g_capsule.y, g_capsule.type);
+    /* Flicker-free move: erase old + draw new body in one bank switch */
+    col = cap_colour[g_capsule.type];
+    vid_move_capsule(s_prev_cap_x, s_prev_cap_y,
+                     g_capsule.x, g_capsule.y,
+                     CAP_W, CAP_H, col);
+
+    /* Overlay letter (needs its own bank switch but is small) */
+    letter[0] = cap_letter[g_capsule.type];
+    letter[1] = '\0';
+    draw_text(g_capsule.x + 3, g_capsule.y, letter, COL_WHITE);
+
     s_prev_cap_x = g_capsule.x;
     s_prev_cap_y = g_capsule.y;
 }
@@ -487,6 +499,9 @@ void game_update(void)
 
     /* Update falling capsule */
     game_update_capsule();
+
+    /* Update enemies */
+    enemy_update();
 
     if (!g_ball.active) {
         g_ball.x = g_paddle_x + g_paddle_w / 2;
@@ -517,8 +532,9 @@ void game_update(void)
 
     /* Death */
     if (ny >= PF_BOTTOM) {
-        /* Erase ball at its current position */
+        /* Erase ball at current and last drawn position */
         vid_fill_rect(g_ball.x, g_ball.y, BALL_SIZE, BALL_SIZE, COL_BLACK);
+        vid_fill_rect(s_prev_ball_x, s_prev_ball_y, BALL_SIZE, BALL_SIZE, COL_BLACK);
         g_ball.active = 0;
         g_lives--;
         g_dirty |= DIRTY_LIVES;
@@ -533,10 +549,17 @@ void game_update(void)
             capsule_erase(s_prev_cap_x, s_prev_cap_y);
             g_capsule.type = CAP_NONE;
         }
+        /* Clear enemies on death */
+        enemy_reset();
         sfx_lose_life();
         if (g_lives == 0) {
             g_state = STATE_GAMEOVER;
         } else {
+            /* Erase old paddle, reset to centre */
+            vid_fill_rect(g_paddle_x, PADDLE_Y, g_paddle_w, PADDLE_H, COL_BLACK);
+            g_paddle_x = (PF_LEFT + PF_WIDTH / 2) - (g_paddle_w / 2);
+            s_prev_paddle_x = g_paddle_x;
+            game_draw_paddle_force();
             g_state = STATE_LAUNCH;
             game_reset_ball();
         }

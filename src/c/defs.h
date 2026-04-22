@@ -27,13 +27,13 @@
 #define GRID_TOP       (PF_TOP + 2)
 
 /* Paddle */
-#define PADDLE_Y       230
-#define PADDLE_W       28     /* normal width */
-#define PADDLE_H       4
-#define PADDLE_WIDE_W  42     /* enlarged */
+#define PADDLE_Y       228
+#define PADDLE_W       34     /* normal width */
+#define PADDLE_H       10
+#define PADDLE_WIDE_W  52     /* enlarged */
 #define PADDLE_MIN_X   (PF_LEFT + 2)
 #define PADDLE_MAX_X   (PF_LEFT + PF_WIDTH - 2)
-#define PADDLE_SPEED   4
+#define PADDLE_SPEED   3
 
 /* Ball */
 #define BALL_SIZE      4      /* 4x4 pixel ball */
@@ -129,5 +129,24 @@ typedef struct {
     uint16_t x, y;
     int8_t   dx, dy;
 } Ball;
+
+/* ── Enemies ───────────────────────────────────────────── */
+#define MAX_ENEMIES    2
+#define ENEMY_W        8      /* pixels wide */
+#define ENEMY_HT       8      /* pixels tall */
+#define ENEMY_SCORE    100    /* points per kill */
+#define ENEMY_SPAWN_MIN 300   /* min frames between spawns */
+#define ENEMY_SPAWN_MAX 600   /* max frames between spawns */
+
+typedef struct {
+    int16_t  x;
+    int16_t  y;
+    int8_t   dx;
+    int8_t   dy;
+    uint8_t  active;
+    uint8_t  type;       /* sprite variant 0..1 */
+    uint8_t  anim;       /* animation frame counter */
+    uint8_t  steps;      /* sideways steps remaining before vertical step */
+} Enemy;
 
 #endif /* DEFS_H */

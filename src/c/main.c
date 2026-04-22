@@ -11,6 +11,7 @@
 #include "sound.h"
 #include "game.h"
 #include "input.h"
+#include "enemy.h"
 
 /* ── Delay loop ── */
 void delay(uint16_t n)
@@ -19,8 +20,8 @@ void delay(uint16_t n)
     for (i = 0; i < n; i++) ;
 }
 
-/* Centre text within the playfield area */
-static void draw_pf_centred(uint16_t y, const char *str, uint8_t colour)
+/* Centre text within the playfield area, with optional black background pad */
+static void draw_pf_centred_bg(uint16_t y, const char *str, uint8_t colour, uint8_t pad)
 {
     uint8_t len = 0;
     const char *p = str;
@@ -28,7 +29,14 @@ static void draw_pf_centred(uint16_t y, const char *str, uint8_t colour)
     while (*p++) len++;
     w = (uint16_t)len * (FONT_W + FONT_SPACING) - FONT_SPACING;
     x = PF_LEFT + (PF_WIDTH - w) / 2;
+    if (pad)
+        vid_fill_rect(x - pad, y - pad, (uint8_t)(w + pad * 2), FONT_CH + pad * 2, COL_BLACK);
     draw_text(x, y, str, colour);
+}
+
+static void draw_pf_centred(uint16_t y, const char *str, uint8_t colour)
+{
+    draw_pf_centred_bg(y, str, colour, 0);
 }
 
 /* ── ARKANOID logo bitmap (8px wide, 9 rows per glyph) ── */
@@ -308,9 +316,9 @@ int main(void)
 
         /* Game over? */
         if (g_state == STATE_GAMEOVER) {
-            draw_pf_centred(120, "GAME OVER", COL_BRRED);
+            draw_pf_centred_bg(120, "GAME OVER", COL_BRRED, 2);
             if (!g_autoplay) {
-                draw_pf_centred(140, "PRESS ANY KEY", COL_WHITE);
+                draw_pf_centred_bg(140, "PRESS ANY KEY", COL_WHITE, 2);
                 wait_key();
             } else {
                 delay(500);
@@ -327,11 +335,29 @@ int main(void)
 
         /* Draw only what changed */
         game_draw_paddle();
-        game_move_ball();
         game_draw_sidebar_values();
+        enemy_draw();
 
-        /* Frame pacing */
-        delay(80);
+        /* Ball update + draw: run physics to catch up with frame counter,
+         * so paddle drawing time doesn't slow the ball down. */
+        {
+            extern uint8_t frame_counter;
+            static uint8_t last_frame;
+            uint8_t now;
+            uint8_t elapsed;
+            uint8_t steps;
+            now = frame_counter;
+            elapsed = (uint8_t)(now - last_frame);
+            /* Run physics every 3 ticks for comfortable speed */
+            steps = elapsed / 4;
+            if (steps == 0) steps = 1;
+            if (steps > 2) steps = 2;
+            while (steps--) {
+                game_update();
+            }
+            last_frame = now;
+        }
+        game_move_ball();
     }
 
     sound_off();

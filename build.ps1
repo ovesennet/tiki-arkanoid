@@ -90,7 +90,8 @@ if ($Hello) {
         "$SrcDir\game.c",
         "$SrcDir\levels.c",
         "$SrcDir\sound.c",
-        "$SrcDir\input.c"
+        "$SrcDir\input.c",
+        "$SrcDir\enemy.c"
     )
     
     # Assembly source files

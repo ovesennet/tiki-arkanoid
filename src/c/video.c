@@ -12,6 +12,8 @@ extern void vid_hline_gfx(void);
 extern void vid_vline_gfx(void);
 extern void vid_fill_rect_gfx(void);
 extern void vid_draw_text_gfx(void);
+extern void vsync_init_asm(void);
+extern void vsync_shutdown_asm(void);
 
 /* Global parameter block (bss_graphics section) */
 extern uint16_t txt_x;
@@ -28,7 +30,7 @@ extern uint8_t  gfx_height;
 
 /* Palette: CGA-like 16 colours */
 static const char palette[16] = {
-    0x00, 0x03, 0x1C, 0x1F, 0xE0, 0xE3, 0xF0, 0xB5,
+    0x00, 0x03, 0x1C, 0x1F, 0xE0, 0xE3, 0xF0, 0xDB,
     0x49, 0x4B, 0x5C, 0x5F, 0xEC, 0xF3, 0xFC, 0xFF,
 };
 
@@ -37,20 +39,16 @@ void vid_init(void)
     gr_defmod(3);
     gr_setpalette(16, palette);
 
-    __asm
-    ld   a, $C9
-    ld   ($F057), a
-    __endasm;
+    /* Install our frame-counter ISR at the CP/M interrupt hook */
+    vsync_init_asm();
 
     vid_clear();
 }
 
 void vid_shutdown(void)
 {
-    __asm
-    ld   a, $C3
-    ld   ($F057), a
-    __endasm;
+    /* Restore original CP/M interrupt handler */
+    vsync_shutdown_asm();
 
     gr_defmod(1);
 }
@@ -109,4 +107,95 @@ void vid_move_ball(uint16_t ox, uint16_t oy, uint16_t nx, uint16_t ny, uint8_t s
     ball_nx = nx; ball_ny = ny;
     ball_sz = sz;
     vid_move_ball_gfx();
+}
+
+/* Flicker-free paddle move */
+extern void vid_move_paddle_gfx(void);
+extern uint16_t pad_old_x;
+extern uint16_t pad_new_x;
+extern uint8_t  pad_w;
+extern uint8_t  pad_h;
+extern uint8_t  pad_y;
+extern uint8_t  pad_col;
+extern uint8_t  pad_ow;
+
+void vid_move_paddle(uint16_t old_x, uint16_t new_x, uint8_t ow, uint8_t w,
+                     uint8_t h, uint8_t y, uint8_t colour)
+{
+    pad_old_x = old_x; pad_new_x = new_x;
+    pad_ow = ow; pad_w = w; pad_h = h;
+    pad_y = y; pad_col = colour;
+    vid_move_paddle_gfx();
+}
+
+/* Flicker-free capsule move */
+extern void vid_move_capsule_gfx(void);
+extern uint16_t cap_ox;
+extern uint16_t cap_oy;
+extern uint16_t cap_nx;
+extern uint16_t cap_ny;
+extern uint8_t  cap_cw;
+extern uint8_t  cap_ch;
+extern uint8_t  cap_col;
+
+void vid_move_capsule(uint16_t ox, uint16_t oy, uint16_t nx, uint16_t ny,
+                      uint8_t w, uint8_t h, uint8_t colour)
+{
+    cap_ox = ox; cap_oy = oy;
+    cap_nx = nx; cap_ny = ny;
+    cap_cw = w; cap_ch = h;
+    cap_col = colour;
+    vid_move_capsule_gfx();
+}
+
+/* Flicker-free enemy move */
+extern void vid_move_enemy_gfx(void);
+extern uint16_t ene_ox;
+extern uint16_t ene_oy;
+extern uint16_t ene_nx;
+extern uint16_t ene_ny;
+extern uint8_t  ene_type;
+extern uint8_t  ene_frame;
+
+void vid_move_enemy(int16_t old_x, int16_t old_y,
+                    int16_t new_x, int16_t new_y,
+                    uint8_t type, uint8_t frame)
+{
+    ene_ox = (uint16_t)old_x;
+    ene_oy = (uint16_t)old_y;
+    ene_nx = (uint16_t)new_x;
+    ene_ny = (uint16_t)new_y;
+    ene_type = type;
+    ene_frame = frame;
+    vid_move_enemy_gfx();
+}
+
+/* Wait for vertical blank */
+extern void wait_vsync_asm(void);
+
+void wait_vsync(void)
+{
+    wait_vsync_asm();
+}
+
+/* Batched VRAM access */
+extern void vid_begin_vram_asm(void);
+extern void vid_end_vram_asm(void);
+extern void vid_fill_rect_nr_asm(void);
+
+void vid_begin_vram(void)
+{
+    vid_begin_vram_asm();
+}
+
+void vid_end_vram(void)
+{
+    vid_end_vram_asm();
+}
+
+void vid_fill_rect_nr(uint16_t x, uint16_t y, uint8_t w, uint8_t h, uint8_t colour)
+{
+    if (w == 0 || h == 0) return;
+    gfx_x1 = x; gfx_y1 = y; gfx_width = w; gfx_height = h; gfx_colour = colour;
+    vid_fill_rect_nr_asm();
 }

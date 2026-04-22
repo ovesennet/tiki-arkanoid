@@ -19,6 +19,9 @@
     PUBLIC  _vid_draw_text_gfx
     PUBLIC  _vid_draw_text_rotcw_gfx
     PUBLIC  _vid_blit_tile_gfx
+    PUBLIC  _vid_begin_vram_asm
+    PUBLIC  _vid_end_vram_asm
+    PUBLIC  _vid_fill_rect_nr_asm
 
     EXTERN  swapgfxbk
     EXTERN  swapgfxbk1
@@ -195,8 +198,12 @@ hl_sorted:
     ld      (_hl_colbyte), a
 
     call    swapgfxbk
+    call    hline_raw_body
+    call    swapgfxbk1
+    ret
 
     ; Phase 1: Left partial byte (x1 odd)
+hline_raw_body:
     ld      a, (_hl_x1)
     bit     0, a
     jr      z, hl_no_left
@@ -222,7 +229,7 @@ hl_lp_noc:
     ld      b, a
     ld      a, (_hl_x2)
     cp      b
-    jp      c, hl_done
+    jp      c, hl_done_raw
 
 hl_no_left:
     ; Phase 3: Right partial byte (x2 even)
@@ -252,7 +259,7 @@ hl_rp_noc:
     ld      c, a
     ld      a, b
     cp      c
-    jp      c, hl_done
+    jp      c, hl_done_raw
 
 hl_no_right:
     ; Phase 2: Middle full bytes
@@ -280,8 +287,78 @@ hl_fill:
     inc     hl
     djnz    hl_fill
 
-hl_done:
-    call    swapgfxbk1
+hl_done_raw:
+    ret
+
+; hline_raw — same as hline_gfx but assumes VRAM already banked in.
+; Params already set in _gfx_x1, _gfx_y1, _gfx_x2, _gfx_colour.
+hline_raw:
+    ld      hl, (_gfx_y1)
+    ld      a, h
+    or      a
+    ret     nz
+    ld      a, l
+    srl     a
+    ld      h, a
+    ld      a, (_gfx_y1)
+    rrca
+    and     $80
+    ld      l, a
+    ld      (_hl_base), hl
+    ld      a, (_gfx_x1)
+    ld      b, a
+    ld      a, (_gfx_x2)
+    ld      c, a
+    ld      a, b
+    cp      c
+    jr      c, hlr_sorted
+    jr      z, hlr_sorted
+    ld      b, c
+    ld      c, a
+hlr_sorted:
+    ld      a, b
+    ld      (_hl_x1), a
+    ld      a, c
+    ld      (_hl_x2), a
+    ld      a, (_gfx_colour)
+    and     $0F
+    ld      (_hl_colnib), a
+    ld      b, a
+    rlca
+    rlca
+    rlca
+    rlca
+    or      b
+    ld      (_hl_colbyte), a
+    jp      hline_raw_body
+
+; fill_rect_raw — filled rectangle, assumes VRAM already banked in.
+; Params: _gfx_x1, _gfx_y1, _gfx_width, _gfx_height, _gfx_colour
+fill_rect_raw:
+    ld      hl, (_gfx_x1)
+    ld      a, (_gfx_width)
+    dec     a
+    add     a, l
+    ld      l, a
+    ld      a, 0
+    adc     a, h
+    ld      h, a
+    ld      (_gfx_x2), hl
+    ld      a, (_gfx_height)
+    ld      b, a
+    or      a
+    ret     z
+frr_loop:
+    push    bc
+    call    hline_raw
+    pop     bc
+    ld      hl, (_gfx_y1)
+    inc     hl
+    ld      (_gfx_y1), hl
+    ld      a, h
+    or      a
+    ret     nz
+    djnz    frr_loop
     ret
 
 ; ============================================================
@@ -376,9 +453,11 @@ _vid_fill_rect_gfx:
     or      a
     ret     z
 
+    call    swapgfxbk
+
 fr_loop:
     push    bc
-    call    _vid_hline_gfx
+    call    hline_raw
     pop     bc
 
     ld      hl, (_gfx_y1)
@@ -386,9 +465,30 @@ fr_loop:
     ld      (_gfx_y1), hl
     ld      a, h
     or      a
-    ret     nz
+    jr      nz, fr_done
 
     djnz    fr_loop
+fr_done:
+    call    swapgfxbk1
+    ret
+
+; ============================================================
+; vid_begin_vram / vid_end_vram — bracket for batched VRAM ops
+; ============================================================
+_vid_begin_vram_asm:
+    call    swapgfxbk
+    ret
+
+_vid_end_vram_asm:
+    call    swapgfxbk1
+    ret
+
+; ============================================================
+; vid_fill_rect_nr — fill rect, NO bank switch (caller must bracket)
+; Uses same globals: _gfx_x1, _gfx_y1, _gfx_width, _gfx_height, _gfx_colour
+; ============================================================
+_vid_fill_rect_nr_asm:
+    call    fill_rect_raw
     ret
 
 ; ============================================================
@@ -670,81 +770,473 @@ _vid_move_ball_gfx:
     ret
 
 ; ============================================================
-; Font data — 5x7 pixel glyphs
+; Frame counter & vsync
+; The CP/M interrupt handler at $F057 is patched to jump to
+; our tiny ISR that increments a frame counter, then RETs.
+; wait_vsync spins until the counter changes — never misses
+; a frame even if game logic takes > 20ms.
+; ============================================================
+
+    SECTION bss_graphics
+
+    PUBLIC  _frame_counter
+_frame_counter:  defs 1
+_saved_f057:     defs 3          ; save original 3 bytes at $F057
+
+    SECTION code_graphics
+
+    PUBLIC  _wait_vsync_asm
+    PUBLIC  _vsync_init_asm
+    PUBLIC  _vsync_shutdown_asm
+
+; Tiny ISR — just increment the frame counter and return.
+_frame_isr:
+    push    af
+    ld      a, (_frame_counter)
+    inc     a
+    ld      (_frame_counter), a
+    pop     af
+    ret
+
+; Install our ISR: save original $F057-$F059, patch with JP _frame_isr
+_vsync_init_asm:
+    ; Save original 3 bytes
+    ld      a, ($F057)
+    ld      (_saved_f057), a
+    ld      a, ($F058)
+    ld      (_saved_f057+1), a
+    ld      a, ($F059)
+    ld      (_saved_f057+2), a
+    ; Patch: JP _frame_isr
+    ld      a, $C3
+    ld      ($F057), a
+    ld      hl, _frame_isr
+    ld      ($F058), hl
+    xor     a
+    ld      (_frame_counter), a
+    ret
+
+; Restore original 3 bytes at $F057
+_vsync_shutdown_asm:
+    ld      a, (_saved_f057)
+    ld      ($F057), a
+    ld      a, (_saved_f057+1)
+    ld      ($F058), a
+    ld      a, (_saved_f057+2)
+    ld      ($F059), a
+    ret
+
+; Wait until frame_counter changes (spin-wait, ~50 Hz)
+_wait_vsync_asm:
+    ld      a, (_frame_counter)
+_wv_loop:
+    ld      b, a
+    ld      a, (_frame_counter)
+    cp      b
+    jr      z, _wv_loop
+    ret
+
+; ============================================================
+; vid_move_paddle_gfx — flicker-free paddle move
+; Erases trailing strip + draws leading strip in ONE bank switch.
+; Also redraws top highlight line.
+;
+; Params in bss_graphics:
+;   _pad_old_x  (uint16)  previous left x
+;   _pad_new_x  (uint16)  new left x
+;   _pad_w      (uint8)   paddle width
+;   _pad_h      (uint8)   paddle height
+;   _pad_y      (uint8)   paddle y position
+;   _pad_col    (uint8)   paddle body colour
+; ============================================================
+
+    SECTION bss_graphics
+
+    PUBLIC  _pad_old_x
+    PUBLIC  _pad_new_x
+    PUBLIC  _pad_w
+    PUBLIC  _pad_h
+    PUBLIC  _pad_y
+    PUBLIC  _pad_col
+    PUBLIC  _pad_ow
+
+_pad_old_x:  defs 2
+_pad_new_x:  defs 2
+_pad_w:      defs 1
+_pad_h:      defs 1
+_pad_y:      defs 1
+_pad_col:    defs 1
+_pad_ow:     defs 1
+
+    SECTION code_graphics
+
+    PUBLIC  _vid_move_paddle_gfx
+
+; Full erase + full redraw in one bank switch — flicker-free & hole-proof.
+_vid_move_paddle_gfx:
+    call    swapgfxbk
+
+    ; 1) Erase old paddle: fill_rect(old_x, pad_y, pad_ow, pad_h, BLACK)
+    ld      hl, (_pad_old_x)
+    ld      (_gfx_x1), hl
+    ld      a, (_pad_y)
+    ld      l, a
+    ld      h, 0
+    ld      (_gfx_y1), hl
+    ld      a, (_pad_ow)
+    ld      (_gfx_width), a
+    ld      a, (_pad_h)
+    ld      (_gfx_height), a
+    xor     a
+    ld      (_gfx_colour), a
+    call    fill_rect_raw
+
+    ; 2) Draw body: fill_rect(new_x, pad_y+1, pad_w, pad_h-1, pad_col)
+    ld      hl, (_pad_new_x)
+    ld      (_gfx_x1), hl
+    ld      a, (_pad_y)
+    inc     a
+    ld      l, a
+    ld      h, 0
+    ld      (_gfx_y1), hl
+    ld      a, (_pad_w)
+    ld      (_gfx_width), a
+    ld      a, (_pad_h)
+    dec     a
+    ld      (_gfx_height), a
+    ld      a, (_pad_col)
+    ld      (_gfx_colour), a
+    call    fill_rect_raw
+
+    ; 3) Draw highlight: hline(new_x, new_x+w-1, pad_y, WHITE)
+    ld      hl, (_pad_new_x)
+    ld      (_gfx_x1), hl
+    ld      a, l
+    ld      b, a
+    ld      a, (_pad_w)
+    add     a, b
+    dec     a
+    ld      l, a
+    ld      h, 0
+    ld      (_gfx_x2), hl
+    ld      a, (_pad_y)
+    ld      l, a
+    ld      h, 0
+    ld      (_gfx_y1), hl
+    ld      a, 15           ; COL_WHITE
+    ld      (_gfx_colour), a
+    call    hline_raw
+
+    call    swapgfxbk1
+    ret
+
+; ============================================================
+; vid_move_capsule_gfx — flicker-free capsule move
+; Erases at old position, draws at new position, single bank switch.
+;
+; Params in bss_graphics:
+;   _cap_ox, _cap_oy  (old position)
+;   _cap_nx, _cap_ny  (new position)
+;   _cap_cw, _cap_ch  (capsule width, height)
+;   _cap_col          (capsule body colour)
+; ============================================================
+
+    SECTION bss_graphics
+
+    PUBLIC  _cap_ox
+    PUBLIC  _cap_oy
+    PUBLIC  _cap_nx
+    PUBLIC  _cap_ny
+    PUBLIC  _cap_cw
+    PUBLIC  _cap_ch
+    PUBLIC  _cap_col
+
+_cap_ox:  defs 2
+_cap_oy:  defs 2
+_cap_nx:  defs 2
+_cap_ny:  defs 2
+_cap_cw:  defs 1
+_cap_ch:  defs 1
+_cap_col: defs 1
+
+    SECTION code_graphics
+
+    PUBLIC  _vid_move_capsule_gfx
+
+_vid_move_capsule_gfx:
+    call    swapgfxbk
+
+    ; 1) Erase at old position (black)
+    ld      hl, (_cap_ox)
+    ld      (_gfx_x1), hl
+    ld      hl, (_cap_oy)
+    ld      (_gfx_y1), hl
+    ld      a, (_cap_cw)
+    ld      (_gfx_width), a
+    ld      a, (_cap_ch)
+    ld      (_gfx_height), a
+    xor     a
+    ld      (_gfx_colour), a
+    call    fill_rect_raw
+
+    ; 2) Draw at new position (cap_col)
+    ld      hl, (_cap_nx)
+    ld      (_gfx_x1), hl
+    ld      hl, (_cap_ny)
+    ld      (_gfx_y1), hl
+    ld      a, (_cap_cw)
+    ld      (_gfx_width), a
+    ld      a, (_cap_ch)
+    ld      (_gfx_height), a
+    ld      a, (_cap_col)
+    ld      (_gfx_colour), a
+    call    fill_rect_raw
+
+    call    swapgfxbk1
+    ret
+
+; ============================================================
+; vid_move_enemy_gfx — flicker-free enemy move
+; Erases old rect + draws sprite at new pos in ONE bank switch.
+;
+; Params in bss_graphics:
+;   _ene_ox, _ene_oy  (old position)
+;   _ene_nx, _ene_ny  (new position)
+;   _ene_type (uint8)  0 or 1
+;   _ene_frame (uint8) 0 or 1 (wobble frame)
+; ============================================================
+
+    SECTION bss_graphics
+
+    PUBLIC  _ene_ox
+    PUBLIC  _ene_oy
+    PUBLIC  _ene_nx
+    PUBLIC  _ene_ny
+    PUBLIC  _ene_type
+    PUBLIC  _ene_frame
+
+_ene_ox:    defs 2
+_ene_oy:    defs 2
+_ene_nx:    defs 2
+_ene_ny:    defs 2
+_ene_type:  defs 1
+_ene_frame: defs 1
+
+    SECTION code_graphics
+
+; Sprite command tables: (dx, dy, w, h, colour) x 8 entries + $FF terminator
+; Type 0 (cyan diamond), frame 0
+_spr_t0f0:
+    defb 1, 0, 6, 1, 3
+    defb 0, 1, 8, 1, 11
+    defb 0, 2, 8, 4, 3
+    defb 2, 3, 1, 2, 15
+    defb 5, 3, 1, 2, 15
+    defb 1, 6, 6, 1, 11
+    defb 2, 7, 2, 1, 3
+    defb 4, 7, 2, 1, 3
+    defb $FF
+
+; Type 0, frame 1 (wobble)
+_spr_t0f1:
+    defb 1, 0, 6, 1, 3
+    defb 1, 1, 8, 1, 11
+    defb 0, 2, 8, 4, 3
+    defb 2, 3, 1, 2, 15
+    defb 5, 3, 1, 2, 15
+    defb 1, 6, 6, 1, 11
+    defb 2, 7, 2, 1, 3
+    defb 5, 7, 2, 1, 3
+    defb $FF
+
+; Type 1 (magenta blocky), frame 0
+_spr_t1f0:
+    defb 2, 0, 4, 1, 5
+    defb 1, 1, 6, 1, 13
+    defb 0, 2, 8, 4, 5
+    defb 1, 3, 2, 2, 15
+    defb 5, 3, 2, 2, 15
+    defb 1, 6, 6, 1, 13
+    defb 0, 7, 3, 1, 5
+    defb 5, 7, 3, 1, 5
+    defb $FF
+
+; Type 1, frame 1 (wobble)
+_spr_t1f1:
+    defb 2, 0, 4, 1, 5
+    defb 1, 1, 6, 1, 13
+    defb 0, 2, 8, 4, 5
+    defb 1, 3, 2, 2, 15
+    defb 5, 3, 2, 2, 15
+    defb 1, 6, 6, 1, 13
+    defb 1, 7, 3, 1, 5
+    defb 4, 7, 3, 1, 5
+    defb $FF
+
+; Lookup table: index = type*2 + frame
+_spr_table:
+    defw _spr_t0f0
+    defw _spr_t0f1
+    defw _spr_t1f0
+    defw _spr_t1f1
+
+    PUBLIC  _vid_move_enemy_gfx
+
+_vid_move_enemy_gfx:
+    call    swapgfxbk
+
+    ; 1) Erase at old position (10x9 black)
+    ld      hl, (_ene_ox)
+    ld      (_gfx_x1), hl
+    ld      hl, (_ene_oy)
+    ld      (_gfx_y1), hl
+    ld      a, 10
+    ld      (_gfx_width), a
+    ld      a, 9
+    ld      (_gfx_height), a
+    xor     a
+    ld      (_gfx_colour), a
+    call    fill_rect_raw
+
+    ; 2) Look up sprite table: index = type*2 + frame
+    ld      a, (_ene_type)
+    add     a, a
+    ld      c, a
+    ld      a, (_ene_frame)
+    add     a, c
+    add     a, a            ; *2 for 16-bit pointers
+    ld      c, a
+    ld      b, 0
+    ld      hl, _spr_table
+    add     hl, bc
+    ld      e, (hl)
+    inc     hl
+    ld      d, (hl)         ; DE = sprite command table ptr
+
+    ; 3) Draw sprite commands
+_me_loop:
+    ld      a, (de)
+    cp      $FF
+    jr      z, _me_done
+
+    ; x = new_x + dx
+    ld      hl, (_ene_nx)
+    add     a, l
+    ld      l, a
+    ld      a, 0
+    adc     a, h
+    ld      h, a
+    ld      (_gfx_x1), hl
+
+    inc     de
+    ld      a, (de)         ; dy
+    ld      hl, (_ene_ny)
+    add     a, l
+    ld      l, a
+    ld      a, 0
+    adc     a, h
+    ld      h, a
+    ld      (_gfx_y1), hl
+
+    inc     de
+    ld      a, (de)         ; w
+    ld      (_gfx_width), a
+
+    inc     de
+    ld      a, (de)         ; h
+    ld      (_gfx_height), a
+
+    inc     de
+    ld      a, (de)         ; colour
+    ld      (_gfx_colour), a
+
+    inc     de
+    push    de
+    call    fill_rect_raw
+    pop     de
+
+    jr      _me_loop
+
+_me_done:
+    call    swapgfxbk1
+    ret
+
+; ============================================================
+; Font data — 5x7 pixel glyphs (thick arcade style, 2px strokes)
 ; ============================================================
 _font_gfx:
-    ; A
-    defb $04, $0A, $11, $11, $1F, $11, $11
+    ; A — flat top, thick bars
+    defb $0E, $1B, $1B, $1F, $1B, $1B, $1B
     ; B
-    defb $1E, $11, $11, $1E, $11, $11, $1E
+    defb $1E, $1B, $1B, $1E, $1B, $1B, $1E
     ; C
-    defb $0E, $11, $10, $10, $10, $11, $0E
+    defb $0E, $1B, $18, $18, $18, $1B, $0E
     ; D
-    defb $1E, $11, $11, $11, $11, $11, $1E
+    defb $1E, $1B, $1B, $1B, $1B, $1B, $1E
     ; E
-    defb $1F, $10, $10, $1E, $10, $10, $1F
+    defb $1F, $18, $18, $1E, $18, $18, $1F
     ; F
-    defb $1F, $10, $10, $1E, $10, $10, $10
+    defb $1F, $18, $18, $1E, $18, $18, $18
     ; G
-    defb $0E, $11, $10, $17, $11, $11, $0F
+    defb $0E, $1B, $18, $1B, $1B, $1B, $0E
     ; H
-    defb $11, $11, $11, $1F, $11, $11, $11
-    ; I
-    defb $0E, $04, $04, $04, $04, $04, $0E
+    defb $1B, $1B, $1B, $1F, $1B, $1B, $1B
+    ; I — full-width serifs
+    defb $1F, $04, $04, $04, $04, $04, $1F
     ; J
-    defb $07, $02, $02, $02, $02, $12, $0C
+    defb $0F, $03, $03, $03, $03, $1B, $0E
     ; K
-    defb $11, $12, $14, $18, $14, $12, $11
+    defb $1B, $1A, $1C, $18, $1C, $1A, $1B
     ; L
-    defb $10, $10, $10, $10, $10, $10, $1F
+    defb $18, $18, $18, $18, $18, $18, $1F
     ; M
-    defb $11, $1B, $15, $15, $11, $11, $11
+    defb $1B, $1F, $15, $1B, $1B, $1B, $1B
     ; N
-    defb $11, $11, $19, $15, $13, $11, $11
+    defb $1B, $1B, $1F, $1F, $1B, $1B, $1B
     ; O
-    defb $0E, $11, $11, $11, $11, $11, $0E
+    defb $0E, $1B, $1B, $1B, $1B, $1B, $0E
     ; P
-    defb $1E, $11, $11, $1E, $10, $10, $10
+    defb $1E, $1B, $1B, $1E, $18, $18, $18
     ; Q
-    defb $0E, $11, $11, $11, $15, $12, $0D
+    defb $0E, $1B, $1B, $1B, $1B, $0E, $03
     ; R
-    defb $1E, $11, $11, $1E, $14, $12, $11
+    defb $1E, $1B, $1B, $1E, $1A, $1B, $1B
     ; S
-    defb $0E, $11, $10, $0E, $01, $11, $0E
+    defb $0E, $1B, $18, $0E, $03, $1B, $0E
     ; T
     defb $1F, $04, $04, $04, $04, $04, $04
     ; U
-    defb $11, $11, $11, $11, $11, $11, $0E
+    defb $1B, $1B, $1B, $1B, $1B, $1B, $0E
     ; V
-    defb $11, $11, $11, $11, $0A, $0A, $04
+    defb $1B, $1B, $1B, $1B, $1B, $0A, $04
     ; W
-    defb $11, $11, $11, $15, $15, $15, $0A
+    defb $1B, $1B, $1B, $1B, $15, $1F, $0A
     ; X
-    defb $11, $11, $0A, $04, $0A, $11, $11
+    defb $1B, $1B, $0E, $04, $0E, $1B, $1B
     ; Y
-    defb $11, $11, $0A, $04, $04, $04, $04
+    defb $1B, $1B, $0E, $04, $04, $04, $04
     ; Z
-    defb $1F, $01, $02, $04, $08, $10, $1F
+    defb $1F, $03, $06, $04, $0C, $18, $1F
     ; 0
-    defb $0E, $11, $13, $15, $19, $11, $0E
+    defb $0E, $1B, $1B, $1B, $1B, $1B, $0E
     ; 1
-    defb $04, $0C, $04, $04, $04, $04, $0E
+    defb $0C, $1C, $0C, $0C, $0C, $0C, $1F
     ; 2
-    defb $0E, $11, $01, $06, $08, $10, $1F
+    defb $0E, $1B, $03, $06, $0C, $18, $1F
     ; 3
-    defb $0E, $11, $01, $06, $01, $11, $0E
+    defb $0E, $1B, $03, $0E, $03, $1B, $0E
     ; 4
-    defb $02, $06, $0A, $12, $1F, $02, $02
+    defb $03, $0B, $13, $1B, $1F, $03, $03
     ; 5
-    defb $1F, $10, $1E, $01, $01, $11, $0E
+    defb $1F, $18, $1E, $03, $03, $1B, $0E
     ; 6
-    defb $06, $08, $10, $1E, $11, $11, $0E
+    defb $0E, $18, $18, $1E, $1B, $1B, $0E
     ; 7
-    defb $1F, $01, $02, $04, $08, $08, $08
+    defb $1F, $03, $03, $06, $0C, $0C, $0C
     ; 8
-    defb $0E, $11, $11, $0E, $11, $11, $0E
+    defb $0E, $1B, $1B, $0E, $1B, $1B, $0E
     ; 9
-    defb $0E, $11, $11, $0F, $01, $02, $0C
+    defb $0E, $1B, $1B, $0F, $03, $03, $0E
     ; space
     defb $00, $00, $00, $00, $00, $00, $00
     ; !

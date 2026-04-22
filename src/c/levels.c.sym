@@ -1,5 +1,8 @@
-_levels                         = $0251 ; addr, global, , , rodata_compiler, C:\code\TikiArkanoid\src\c\levels.c:72
+_levels                         = $0493 ; addr, global, , , rodata_compiler, C:\code\TikiArkanoid\src\c\levels.c:131
 _lvl1                           = $0000 ; addr, local, , , rodata_compiler, C:\code\TikiArkanoid\src\c\levels.c:8
 _lvl2                           = $005D ; addr, local, , , rodata_compiler, C:\code\TikiArkanoid\src\c\levels.c:20
 _lvl3                           = $0108 ; addr, local, , , rodata_compiler, C:\code\TikiArkanoid\src\c\levels.c:38
 _lvl4                           = $01B3 ; addr, local, , , rodata_compiler, C:\code\TikiArkanoid\src\c\levels.c:56
+_lvl5                           = $026B ; addr, local, , , rodata_compiler, C:\code\TikiArkanoid\src\c\levels.c:75
+_lvl6                           = $033D ; addr, local, , , rodata_compiler, C:\code\TikiArkanoid\src\c\levels.c:96
+_lvl7                           = $03DB ; addr, local, , , rodata_compiler, C:\code\TikiArkanoid\src\c\levels.c:113
