@@ -12,6 +12,7 @@
 #include "game.h"
 #include "input.h"
 #include "enemy.h"
+#include "levels.h"
 
 /* ── Delay loop ── */
 void delay(uint16_t n)
@@ -165,6 +166,107 @@ static void draw_ship(void)
     vid_fill_rect(122, 141, 12, 4, COL_BRRED);
 }
 
+/* Forward declarations */
+static void wait_key(void);
+static void draw_title(void);
+
+/* ── Tiki mask face bitmap (20 rows x 13 cols, 4x4 pixel blocks) ── */
+/* Colours: 0=black 1=blue 6=brblue 8=dkgrey 7=ltgrey F=white B=brcyan */
+static const uint8_t tiki_face[20][13] = {
+    {0x0,0x1,0x1,0x7,0x7,0x7,0x7,0x7,0x7,0x7,0x1,0x1,0x0},
+    {0x0,0x1,0x7,0x7,0xF,0xF,0xF,0xF,0xF,0x7,0x7,0x1,0x0},
+    {0x0,0x1,0x7,0xF,0x7,0x7,0x7,0x7,0x7,0xF,0x7,0x1,0x0},
+    {0x0,0x1,0x7,0x7,0x7,0x9,0x9,0x9,0x7,0x7,0x7,0x1,0x0},
+    {0x0,0x1,0x9,0x7,0x9,0x9,0x9,0x9,0x9,0x7,0x9,0x1,0x0},
+    {0x0,0x1,0x9,0x9,0x9,0x1,0x9,0x1,0x9,0x9,0x9,0x1,0x0},
+    {0x0,0x1,0x9,0x9,0x1,0x1,0x9,0x1,0x1,0x9,0x9,0x1,0x0},
+    {0x0,0x1,0x9,0x9,0x1,0x0,0x9,0x0,0x1,0x9,0x9,0x1,0x0},
+    {0x0,0x1,0x9,0x9,0x9,0x1,0x9,0x1,0x9,0x9,0x9,0x1,0x0},
+    {0x0,0x1,0x9,0x9,0x9,0x9,0x9,0x9,0x9,0x9,0x9,0x1,0x0},
+    {0x0,0x1,0x9,0x9,0x9,0x9,0x0,0x9,0x9,0x9,0x9,0x1,0x0},
+    {0x0,0x1,0x9,0x9,0x9,0x0,0x0,0x0,0x9,0x9,0x9,0x1,0x0},
+    {0x0,0x1,0x9,0x9,0x0,0x0,0x0,0x0,0x0,0x9,0x9,0x1,0x0},
+    {0x0,0x1,0x9,0x9,0x0,0x0,0x0,0x0,0x0,0x9,0x9,0x1,0x0},
+    {0x0,0x1,0x9,0x9,0x9,0x0,0x0,0x0,0x9,0x9,0x9,0x1,0x0},
+    {0x0,0x1,0x9,0x7,0x9,0x9,0x9,0x9,0x9,0x7,0x9,0x1,0x0},
+    {0x0,0x1,0x7,0x7,0x7,0x9,0x7,0x9,0x7,0x7,0x7,0x1,0x0},
+    {0x0,0x1,0x7,0x7,0x9,0x7,0x9,0x7,0x9,0x7,0x7,0x1,0x0},
+    {0x0,0x1,0x1,0x7,0x7,0x9,0x9,0x9,0x7,0x7,0x1,0x1,0x0},
+    {0x0,0x0,0x1,0x1,0x1,0x1,0x1,0x1,0x1,0x1,0x1,0x0,0x0},
+};
+
+#define TIKI_BLK  6   /* 6x6 pixel blocks */
+#define TIKI_COLS 13
+#define TIKI_ROWS 20
+#define TIKI_W    (TIKI_COLS * TIKI_BLK)
+#define TIKI_H    (TIKI_ROWS * TIKI_BLK)
+#define TIKI_X    ((256 - TIKI_W) / 2)
+#define TIKI_Y    20
+
+static void draw_tiki_face(void)
+{
+    uint8_t r, c;
+    for (r = 0; r < TIKI_ROWS; r++) {
+        for (c = 0; c < TIKI_COLS; c++) {
+            uint8_t col = tiki_face[r][c];
+            if (col != 0)
+                vid_fill_rect(TIKI_X + c * TIKI_BLK, TIKI_Y + r * TIKI_BLK,
+                              TIKI_BLK, TIKI_BLK, col);
+        }
+    }
+}
+
+/* ── Number-to-string helper ── */
+static void u32_to_str(uint32_t v, char *buf, uint8_t len)
+{
+    uint8_t i = len;
+    buf[i] = '\0';
+    do {
+        buf[--i] = '0' + (uint8_t)(v % 10);
+        v /= 10;
+    } while (v && i > 0);
+    while (i > 0) buf[--i] = ' ';
+}
+
+static void u8_to_str(uint8_t v, char *buf, uint8_t len)
+{
+    uint8_t i = len;
+    buf[i] = '\0';
+    do {
+        buf[--i] = '0' + (v % 10);
+        v /= 10;
+    } while (v && i > 0);
+    while (i > 0) buf[--i] = ' ';
+}
+
+/* ── Win screen ── */
+static void draw_win_screen(void)
+{
+    char buf[8];
+
+    vid_clear();
+    draw_tiki_face();
+
+    draw_text_centred(TIKI_Y + TIKI_H + 8, "YOU BEAT ME!", COL_BRRED);
+
+    draw_text_centred(TIKI_Y + TIKI_H + 26, "SCORE", COL_BRCYAN);
+    u32_to_str(g_score, buf, 7);
+    draw_text_centred(TIKI_Y + TIKI_H + 36, buf, COL_WHITE);
+
+    draw_text_centred(TIKI_Y + TIKI_H + 50, "LEVEL", COL_BRCYAN);
+    u8_to_str(g_round, buf, 3);
+    draw_text_centred(TIKI_Y + TIKI_H + 60, buf, COL_WHITE);
+
+    draw_text_centred(TIKI_Y + TIKI_H + 74, "LIVES", COL_BRCYAN);
+    u8_to_str(g_lives, buf, 3);
+    draw_text_centred(TIKI_Y + TIKI_H + 84, buf, COL_WHITE);
+
+    draw_text_centred(240, "PRESS ANY KEY", COL_YELLOW);
+
+    sfx_win();
+    wait_key();
+}
+
 /* ── Title screen ── */
 static void draw_title(void)
 {
@@ -230,6 +332,20 @@ int main(void)
         /* Next level with '+' */
         if (input_pressed(KBIT_NEXT)) {
             g_round++;
+            if (g_round > NUM_LEVELS) {
+                g_round = NUM_LEVELS;
+                draw_win_screen();
+                draw_title();
+                wait_key();
+                vid_clear();
+                game_init();
+                game_draw_playfield();
+                game_draw_sidebar_labels();
+                game_draw_paddle_force();
+                sfx_stage_intro();
+                input_flush();
+                continue;
+            }
             g_dirty |= DIRTY_ROUND;
             game_load_stage(g_round);
             g_state = STATE_LAUNCH;
@@ -284,6 +400,11 @@ int main(void)
                 game_launch_ball();
                 g_state = STATE_PLAY;
             }
+            /* Laser autofire: shoot while space held */
+            if (input_held(KBIT_FIRE) && g_state == STATE_PLAY &&
+                g_paddle_mode == PMODE_LASER) {
+                game_fire_laser();
+            }
         }
         if (input_pressed(KBIT_PAUSE)) {
             draw_text(SIDE_X, SIDE_Y + 78, "PAUSE", COL_WHITE);
@@ -303,15 +424,29 @@ int main(void)
         /* Stage cleared? */
         if (g_bricks_left == 0 && g_state == STATE_PLAY) {
             g_round++;
-            g_dirty |= DIRTY_ROUND;
-            game_load_stage(g_round);
-            g_state = STATE_LAUNCH;
-            game_reset_ball();
-            vid_clear();
-            game_draw_playfield();
-            game_draw_sidebar_labels();
-            g_dirty = DIRTY_ALL;
-            sfx_stage_intro();
+            if (g_round > NUM_LEVELS) {
+                g_round = NUM_LEVELS;
+                draw_win_screen();
+                draw_title();
+                wait_key();
+                vid_clear();
+                game_init();
+                game_draw_playfield();
+                game_draw_sidebar_labels();
+                game_draw_paddle_force();
+                sfx_stage_intro();
+                input_flush();
+            } else {
+                g_dirty |= DIRTY_ROUND;
+                game_load_stage(g_round);
+                g_state = STATE_LAUNCH;
+                game_reset_ball();
+                vid_clear();
+                game_draw_playfield();
+                game_draw_sidebar_labels();
+                g_dirty = DIRTY_ALL;
+                sfx_stage_intro();
+            }
         }
 
         /* Game over? */

@@ -89,7 +89,7 @@
 #define KEY_PAUSE      'p'
 
 /* ── Scoring ───────────────────────────────────────────── */
-#define START_LIVES    5
+#define START_LIVES    100
 #define EXTRA_LIFE_PTS 20000UL
 
 /* ── Power-up capsule types ────────────────────────────── */
@@ -129,6 +129,18 @@ typedef struct {
     uint16_t x, y;
     int8_t   dx, dy;
 } Ball;
+
+/* ── Laser bolts ───────────────────────────────────────── */
+#define MAX_LASERS     2
+#define LASER_W        2      /* pixels wide */
+#define LASER_H        6      /* pixels tall */
+#define LASER_SPEED    3      /* pixels per frame */
+#define LASER_COOLDOWN 8      /* frames between shots */
+
+typedef struct {
+    uint8_t  active;
+    uint16_t x, y;
+} Laser;
 
 /* ── Enemies ───────────────────────────────────────────── */
 #define MAX_ENEMIES    2

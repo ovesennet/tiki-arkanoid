@@ -68,17 +68,17 @@ if (-not (Test-Path $BaseDisk)) {
 Write-Host "Using base disk: $BaseDisk" -ForegroundColor DarkGray
 $disk = [System.IO.File]::ReadAllBytes($BaseDisk)
 
-# === Scan existing directory to find used blocks and any old TIKIPAC entry ===
+# === Scan existing directory to find used blocks and any old entry ===
 $TOTAL_BLOCKS = ($IMAGE_SIZE - $DATA_OFFSET) / $BLOCK_SIZE
 $usedBlocks = New-Object bool[] $TOTAL_BLOCKS
-$oldSlot = -1
+$oldSlots = @()
 
 for ($s = 0; $s -lt $DIR_ENTRIES; $s++) {
     $off = $DATA_OFFSET + ($s * $DIR_ENTRY_SIZE)
     $user = $disk[$off]
     if ($user -eq $CPM_EMPTY) { continue }  # empty slot
 
-    # Check if this is an existing TIKIPAC.COM entry
+    # Check if this is an existing entry for our file
     $fnMatch = $true
     $fnPadCheck = $comName.ToUpper().PadRight(8).Substring(0, 8)
     $exPadCheck = "COM".PadRight(3).Substring(0, 3)
@@ -92,9 +92,16 @@ for ($s = 0; $s -lt $DIR_ENTRIES; $s++) {
     }
 
     if ($fnMatch) {
-        # Found old TIKIPAC.COM — remember slot, free its blocks
-        $oldSlot = $s
-        Write-Host "  Replacing existing $comName.COM in slot $s" -ForegroundColor DarkGray
+        # Found old entry (possibly multi-extent) — remember slot, free its blocks
+        $oldSlots += $s
+        Write-Host "  Replacing existing $comName.COM extent in slot $s" -ForegroundColor DarkGray
+        # Free the blocks from this old extent
+        for ($i = 0; $i -lt 16; $i++) {
+            $blk = $disk[$off + 16 + $i]
+            # Don't mark as used — these are ours to reclaim
+        }
+        # Mark slot as empty so it can be reused
+        $disk[$off] = $CPM_EMPTY
     } else {
         # Mark blocks used by other files
         for ($i = 0; $i -lt 16; $i++) {
@@ -106,9 +113,9 @@ for ($s = 0; $s -lt $DIR_ENTRIES; $s++) {
     }
 }
 
-# Find a free directory slot (reuse old TIKIPAC slot or find empty)
-if ($oldSlot -ge 0) {
-    $dirSlot = $oldSlot
+# Find a free directory slot (reuse old slot or find empty)
+if ($oldSlots.Count -gt 0) {
+    $dirSlot = $oldSlots[0]
 } else {
     $dirSlot = -1
     for ($s = 0; $s -lt $DIR_ENTRIES; $s++) {
@@ -125,11 +132,7 @@ if ($oldSlot -ge 0) {
 $fileSize     = $comBytes.Length
 $blocksNeeded = [Math]::Max(1, [Math]::Ceiling($fileSize / $BLOCK_SIZE))
 $totalRecords = [Math]::Max(1, [Math]::Ceiling($fileSize / $CPM_RECORD_SIZE))
-
-if ($blocksNeeded -gt 16) {
-    Write-Host "ERROR: File too large ($blocksNeeded blocks > 16 max)" -ForegroundColor Red
-    exit 1
-}
+$extentsNeeded = [Math]::Ceiling($blocksNeeded / 16)
 
 $freeBlocks = @()
 for ($b = $FIRST_DATA_BLOCK; $b -lt $TOTAL_BLOCKS; $b++) {
@@ -141,26 +144,62 @@ if ($freeBlocks.Count -lt $blocksNeeded) {
     exit 1
 }
 
-# Write directory entry
+# We need $extentsNeeded directory slots. First is $dirSlot, find more if needed.
+$dirSlots = @($dirSlot)
+if ($extentsNeeded -gt 1) {
+    for ($s = 0; $s -lt $DIR_ENTRIES; $s++) {
+        if ($dirSlots.Count -ge $extentsNeeded) { break }
+        $off = $DATA_OFFSET + ($s * $DIR_ENTRY_SIZE)
+        if ($disk[$off] -eq $CPM_EMPTY -and $s -ne $dirSlot) { $dirSlots += $s }
+    }
+    if ($dirSlots.Count -lt $extentsNeeded) {
+        Write-Host "ERROR: Not enough free directory slots ($($dirSlots.Count) free, need $extentsNeeded)" -ForegroundColor Red
+        exit 1
+    }
+}
+
+# Write directory entries (one per extent, 16 blocks each)
 $fnPad   = $comName.ToUpper().PadRight(8).Substring(0, 8)
 $exPad   = "COM".PadRight(3).Substring(0, 3)
 $fnBytes = [System.Text.Encoding]::ASCII.GetBytes($fnPad)
 $exBytes = [System.Text.Encoding]::ASCII.GetBytes($exPad)
 
-$off = $DATA_OFFSET + ($dirSlot * $DIR_ENTRY_SIZE)
-$disk[$off] = 0  # user 0
-for ($i = 0; $i -lt 8; $i++) { $disk[$off + 1 + $i] = $fnBytes[$i] }
-for ($i = 0; $i -lt 3; $i++) { $disk[$off + 9 + $i] = $exBytes[$i] }
-$disk[$off + 12] = 0                        # extent number
-$disk[$off + 13] = 0                        # S1
-$disk[$off + 14] = 0                        # S2
-$disk[$off + 15] = [byte]$totalRecords      # RC
+$blockIdx = 0
+$recordsSoFar = 0
+for ($ext = 0; $ext -lt $extentsNeeded; $ext++) {
+    $off = $DATA_OFFSET + ($dirSlots[$ext] * $DIR_ENTRY_SIZE)
+    $disk[$off] = 0  # user 0
+    for ($i = 0; $i -lt 8; $i++) { $disk[$off + 1 + $i] = $fnBytes[$i] }
+    for ($i = 0; $i -lt 3; $i++) { $disk[$off + 9 + $i] = $exBytes[$i] }
+    $disk[$off + 12] = [byte]$ext            # extent number
+    $disk[$off + 13] = 0                     # S1
+    $disk[$off + 14] = 0                     # S2
 
-for ($i = 0; $i -lt 16; $i++) {
-    if ($i -lt $blocksNeeded) {
-        $disk[$off + 16 + $i] = [byte]$freeBlocks[$i]
+    # RC: records in this extent
+    # With 2KB blocks and EXM=1, each physical entry covers 2 sub-extents (32KB, 256 records).
+    # EX must increment by 2 per entry. RC counts records in the last active sub-extent.
+    $blocksInExtent = [Math]::Min(16, $blocksNeeded - $blockIdx)
+    $recordsPerBlock = $BLOCK_SIZE / $CPM_RECORD_SIZE   # = 16
+    $recordsInEntry = [Math]::Min($blocksInExtent * $recordsPerBlock, $totalRecords - $recordsSoFar)
+
+    # EX = base extent (even) for start of this entry; if >128 records, set odd (second sub-extent active)
+    $baseExtent = $recordsSoFar / 128
+    if ($recordsInEntry -gt 128) {
+        $disk[$off + 12] = [byte]($baseExtent + 1)  # second sub-extent active
+        $disk[$off + 15] = [byte]($recordsInEntry - 128)  # records in second sub-extent
     } else {
-        $disk[$off + 16 + $i] = 0
+        $disk[$off + 12] = [byte]$baseExtent          # first sub-extent only
+        $disk[$off + 15] = [byte]$recordsInEntry       # records in first sub-extent
+    }
+    $recordsSoFar += $recordsInEntry
+
+    for ($i = 0; $i -lt 16; $i++) {
+        if ($i -lt $blocksInExtent) {
+            $disk[$off + 16 + $i] = [byte]$freeBlocks[$blockIdx]
+            $blockIdx++
+        } else {
+            $disk[$off + 16 + $i] = 0
+        }
     }
 }
 
@@ -177,7 +216,7 @@ for ($b = 0; $b -lt $blocksNeeded; $b++) {
     }
 }
 
-Write-Host "  Added: $fnPad.$exPad  ${fileSize}B  ${blocksNeeded}blk  RC=$totalRecords" -ForegroundColor Green
+Write-Host "  Added: $fnPad.$exPad  ${fileSize}B  ${blocksNeeded}blk  ${extentsNeeded}ext  RC=$totalRecords" -ForegroundColor Green
 
 # Save disk image
 [System.IO.File]::WriteAllBytes($WorkDisk, $disk)

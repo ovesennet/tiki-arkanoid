@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define NUM_LEVELS     7
+#define NUM_LEVELS     32
 #define LEVEL_ROWS     24
 #define LEVEL_COLS     13
 

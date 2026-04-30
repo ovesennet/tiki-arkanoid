@@ -112,3 +112,53 @@ void sfx_stage_intro(void)
     }
     sound_off();
 }
+
+/* ── Victory fanfare — ascending triumphant jingle ── */
+#define N_C5    191
+#define N_D5    170
+#define N_E5x   152
+#define N_G5x   128
+#define N_C6    96
+#define N_E6    76
+#define N_G6    64
+
+static const struct note s_win[] = {
+    {N_C5,   1600},
+    {N_E5x,  1600},
+    {N_G5x,  1600},
+    {N_C6,   3200},
+    {N_G5x,  1200},
+    {N_C6,   3200},
+    {N_E6,   3200},
+    {N_G6,   3200},
+    {N_E6,   1600},
+    {N_G6,  12000},
+};
+#define WIN_LEN (sizeof(s_win)/sizeof(s_win[0]))
+
+void sfx_win(void)
+{
+    uint8_t i;
+    if (!g_sound_on) return;
+    psg_channels(chan0 | chan1 | chan2, chanNone);
+    for (i = 0; i < WIN_LEN; i++) {
+        psg_tone(0, s_win[i].period);
+        psg_tone(1, s_win[i].period / 2);
+        psg_tone(2, s_win[i].period * 2);
+        psg_volume(0, 14);
+        psg_volume(1, 10);
+        psg_volume(2, 8);
+        delay(s_win[i].dur);
+    }
+    sound_off();
+}
+
+void sfx_laser(void)
+{
+    if (!g_sound_on) return;
+    psg_channels(chan0, chanNone);
+    psg_tone(0, 60);   /* high-pitched zap */
+    psg_volume(0, 8);
+    delay(80);
+    sound_off();
+}

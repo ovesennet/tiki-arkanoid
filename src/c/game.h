@@ -20,6 +20,7 @@ extern uint8_t  g_bricks_left; /* breakable bricks remaining */
 extern uint8_t  g_dirty;       /* bitmask: 1=score 2=lives 4=round */
 extern Capsule  g_capsule;     /* single falling capsule */
 extern uint8_t  g_paddle_mode; /* PMODE_xxx */
+extern Laser    g_lasers[MAX_LASERS];  /* laser bolts */
 
 #define DIRTY_SCORE  1
 #define DIRTY_LIVES  2
@@ -41,5 +42,7 @@ void game_draw_sidebar_labels(void);
 void game_draw_sidebar_values(void);
 void game_draw_brick(uint8_t row, uint8_t col);
 void game_update_capsule(void);
+void game_fire_laser(void);
+void game_update_lasers(void);
 
 #endif

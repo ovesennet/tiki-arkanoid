@@ -15,5 +15,7 @@ void sfx_brick(void);
 void sfx_lose_life(void);
 void sfx_launch(void);
 void sfx_stage_intro(void);
+void sfx_win(void);
+void sfx_laser(void);
 
 #endif

@@ -23,6 +23,16 @@ uint8_t  g_bricks_left;
 uint8_t  g_dirty;
 Capsule  g_capsule;
 uint8_t  g_paddle_mode;
+Laser    g_lasers[MAX_LASERS];
+
+/* Power-up duration timer (frames) */
+static uint16_t s_powerup_timer;
+#define POWERUP_DURATION 600   /* ~12 seconds at 50 Hz */
+
+/* Extra balls for Disruption power-up (indices 0..1) */
+static Ball s_extra_balls[MAX_BALLS - 1];
+static uint16_t s_extra_prev_x[MAX_BALLS - 1];
+static uint16_t s_extra_prev_y[MAX_BALLS - 1];
 
 /* Previous paddle position for delta redraw */
 static uint16_t s_prev_paddle_x;
@@ -31,6 +41,9 @@ static uint8_t  s_prev_paddle_w;
 /* Previous ball position for flicker-free move */
 static uint16_t s_prev_ball_x;
 static uint16_t s_prev_ball_y;
+
+/* Laser cooldown counter */
+static uint8_t s_laser_cooldown;
 
 /* ── Simple PRNG (xorshift8) ── */
 static uint8_t s_rng = 0x5A;
@@ -128,8 +141,12 @@ void game_init(void)
     s_prev_paddle_x = g_paddle_x;
     s_prev_paddle_w = g_paddle_w;
     g_paddle_mode = PMODE_NORMAL;
+    s_powerup_timer = 0;
     g_capsule.type = CAP_NONE;
     capsule_reset_counter();
+    g_lasers[0].active = 0;
+    g_lasers[1].active = 0;
+    s_laser_cooldown = 0;
     g_dirty = DIRTY_ALL;
     enemy_init();
     game_load_stage(1);
@@ -146,6 +163,12 @@ void game_load_stage(uint8_t stage)
     g_capsule.type = CAP_NONE;
     g_paddle_mode = PMODE_NORMAL;
     g_paddle_w = PADDLE_W;
+    s_powerup_timer = 0;
+    s_extra_balls[0].active = 0;
+    s_extra_balls[1].active = 0;
+    g_lasers[0].active = 0;
+    g_lasers[1].active = 0;
+    s_laser_cooldown = 0;
     capsule_reset_counter();
     enemy_reset();
 
@@ -400,6 +423,7 @@ static void capsule_apply(uint8_t type)
         goto redraw_paddle;
     case CAP_ENLARGE:
         g_paddle_mode = PMODE_ENLARGE;
+        s_powerup_timer = POWERUP_DURATION;
         /* Erase old paddle, widen, redraw */
         vid_fill_rect(g_paddle_x, PADDLE_Y, g_paddle_w, PADDLE_H, COL_BLACK);
         g_paddle_w = PADDLE_WIDE_W;
@@ -415,15 +439,43 @@ static void capsule_apply(uint8_t type)
         break;
     case CAP_CATCH:
         g_paddle_mode = PMODE_CATCH;
+        s_powerup_timer = POWERUP_DURATION;
         goto redraw_paddle;
     case CAP_LASER:
         g_paddle_mode = PMODE_LASER;
+        s_powerup_timer = POWERUP_DURATION;
         goto redraw_paddle;
     case CAP_DISRUPT:
-        /* TODO: multi-ball */
+        /* Spawn 2 extra balls from current ball position */
+        s_extra_balls[0].active = 1;
+        s_extra_balls[0].x = g_ball.x;
+        s_extra_balls[0].y = g_ball.y;
+        s_extra_balls[0].dx = -g_ball.dx;  /* mirror horizontal */
+        s_extra_balls[0].dy = g_ball.dy;
+        s_extra_prev_x[0] = g_ball.x;
+        s_extra_prev_y[0] = g_ball.y;
+
+        s_extra_balls[1].active = 1;
+        s_extra_balls[1].x = g_ball.x;
+        s_extra_balls[1].y = g_ball.y;
+        s_extra_balls[1].dx = (g_ball.dx > 0) ? -2 : 2;
+        s_extra_balls[1].dy = g_ball.dy;
+        s_extra_prev_x[1] = g_ball.x;
+        s_extra_prev_y[1] = g_ball.y;
         break;
     case CAP_BREAK:
-        /* TODO: stage exit */
+        /* Clear all breakable bricks — stage will advance on next update */
+        {
+            uint8_t br, bc;
+            for (br = 0; br < BRICK_ROWS; br++)
+                for (bc = 0; bc < BRICK_COLS; bc++)
+                    if (g_bricks[br][bc] != BRK_EMPTY &&
+                        g_bricks[br][bc] != BRK_GOLD) {
+                        g_bricks[br][bc] = BRK_EMPTY;
+                        game_draw_brick(br, bc);
+                    }
+            g_bricks_left = 0;
+        }
         break;
     }
     return;
@@ -433,6 +485,29 @@ redraw_paddle:
     if (g_paddle_mode != PMODE_ENLARGE)
         g_paddle_w = PADDLE_W;
     game_draw_paddle_force();
+}
+
+/* Redraw any bricks that overlap the given pixel rectangle */
+static void repair_bricks(uint16_t px, uint16_t py, uint8_t pw, uint8_t ph)
+{
+    int16_t r0, r1, c0, c1;
+    int16_t r, c;
+
+    /* Convert pixel coords to grid coords (clamped) */
+    c0 = ((int16_t)px - GRID_LEFT) / BRICK_W;
+    c1 = ((int16_t)px + pw - 1 - GRID_LEFT) / BRICK_W;
+    r0 = ((int16_t)py - GRID_TOP) / BRICK_H;
+    r1 = ((int16_t)py + ph - 1 - GRID_TOP) / BRICK_H;
+
+    if (c0 < 0) c0 = 0;
+    if (r0 < 0) r0 = 0;
+    if (c1 >= BRICK_COLS) c1 = BRICK_COLS - 1;
+    if (r1 >= BRICK_ROWS) r1 = BRICK_ROWS - 1;
+
+    for (r = r0; r <= r1; r++)
+        for (c = c0; c <= c1; c++)
+            if (g_bricks[r][c] != BRK_EMPTY)
+                game_draw_brick((uint8_t)r, (uint8_t)c);
 }
 
 void game_update_capsule(void)
@@ -448,6 +523,7 @@ void game_update_capsule(void)
     /* Off-screen? */
     if (g_capsule.y >= PF_BOTTOM) {
         capsule_erase(s_prev_cap_x, s_prev_cap_y);
+        repair_bricks(s_prev_cap_x, s_prev_cap_y, CAP_W, FONT_CH);
         g_capsule.type = CAP_NONE;
         return;
     }
@@ -459,7 +535,9 @@ void game_update_capsule(void)
         g_capsule.x <= g_paddle_x + g_paddle_w) {
         /* Erase capsule at both previous and current positions */
         capsule_erase(s_prev_cap_x, s_prev_cap_y);
+        repair_bricks(s_prev_cap_x, s_prev_cap_y, CAP_W, FONT_CH);
         capsule_erase(g_capsule.x, g_capsule.y);
+        repair_bricks(g_capsule.x, g_capsule.y, CAP_W, FONT_CH);
         /* Clear any pixels that leaked below the paddle */
         vid_fill_rect(g_capsule.x, PADDLE_Y + PADDLE_H,
                       CAP_W, CAP_H, COL_BLACK);
@@ -480,6 +558,9 @@ void game_update_capsule(void)
                      g_capsule.x, g_capsule.y,
                      CAP_W, CAP_H, col);
 
+    /* Repair any bricks damaged by erasing the old capsule position */
+    repair_bricks(s_prev_cap_x, s_prev_cap_y, CAP_W, CAP_H);
+
     /* Overlay letter (needs its own bank switch but is small) */
     letter[0] = cap_letter[g_capsule.type];
     letter[1] = '\0';
@@ -487,6 +568,164 @@ void game_update_capsule(void)
 
     s_prev_cap_x = g_capsule.x;
     s_prev_cap_y = g_capsule.y;
+}
+
+/* ── Laser ── */
+
+void game_fire_laser(void)
+{
+    uint8_t i;
+    if (g_paddle_mode != PMODE_LASER) return;
+    if (s_laser_cooldown > 0) { s_laser_cooldown--; return; }
+
+    for (i = 0; i < MAX_LASERS; i++) {
+        if (!g_lasers[i].active) {
+            g_lasers[i].active = 1;
+            /* Shoot from left edge of paddle */
+            g_lasers[i].x = g_paddle_x + 2;
+            g_lasers[i].y = PADDLE_Y - LASER_H;
+            /* Find second slot for right bolt */
+            {
+                uint8_t j;
+                for (j = i + 1; j < MAX_LASERS; j++) {
+                    if (!g_lasers[j].active) {
+                        g_lasers[j].active = 1;
+                        g_lasers[j].x = g_paddle_x + g_paddle_w - 4;
+                        g_lasers[j].y = PADDLE_Y - LASER_H;
+                        break;
+                    }
+                }
+            }
+            s_laser_cooldown = LASER_COOLDOWN;
+            sfx_laser();
+            return;
+        }
+    }
+}
+
+void game_update_lasers(void)
+{
+    uint8_t i;
+    int16_t cx, cy;
+    uint8_t gr, gc;
+
+    for (i = 0; i < MAX_LASERS; i++) {
+        if (!g_lasers[i].active) continue;
+
+        /* Erase old position */
+        vid_fill_rect(g_lasers[i].x, g_lasers[i].y, LASER_W, LASER_H, COL_BLACK);
+        repair_bricks(g_lasers[i].x, g_lasers[i].y, LASER_W, LASER_H);
+
+        /* Move up */
+        if (g_lasers[i].y < PF_TOP + 2 + LASER_SPEED) {
+            g_lasers[i].active = 0;
+            continue;
+        }
+        g_lasers[i].y -= LASER_SPEED;
+
+        /* Check brick collision */
+        cx = (int16_t)g_lasers[i].x - GRID_LEFT;
+        cy = (int16_t)g_lasers[i].y - GRID_TOP;
+        if (cx >= 0 && cx < BRICK_COLS * BRICK_W &&
+            cy >= 0 && cy < BRICK_ROWS * BRICK_H) {
+            gc = (uint8_t)(cx / BRICK_W);
+            gr = (uint8_t)(cy / BRICK_H);
+            if (g_bricks[gr][gc] != BRK_EMPTY) {
+                hit_brick(gr, gc);
+                g_lasers[i].active = 0;
+                continue;
+            }
+        }
+
+        /* Draw at new position */
+        vid_fill_rect(g_lasers[i].x, g_lasers[i].y, LASER_W, LASER_H, COL_BRRED);
+    }
+}
+
+/* ── Extra balls (Disruption) ── */
+
+static void erase_extra_balls(void)
+{
+    uint8_t i;
+    for (i = 0; i < MAX_BALLS - 1; i++) {
+        if (s_extra_balls[i].active) {
+            vid_fill_rect(s_extra_prev_x[i], s_extra_prev_y[i],
+                          BALL_SIZE, BALL_SIZE, COL_BLACK);
+            vid_fill_rect(s_extra_balls[i].x, s_extra_balls[i].y,
+                          BALL_SIZE, BALL_SIZE, COL_BLACK);
+            s_extra_balls[i].active = 0;
+        }
+    }
+}
+
+static void update_extra_balls(void)
+{
+    uint8_t i;
+    int16_t nx, ny, cx, ty;
+    uint8_t gr, gc;
+
+    for (i = 0; i < MAX_BALLS - 1; i++) {
+        if (!s_extra_balls[i].active) continue;
+
+        nx = (int16_t)s_extra_balls[i].x + s_extra_balls[i].dx;
+        ny = (int16_t)s_extra_balls[i].y + s_extra_balls[i].dy;
+
+        /* Wall collisions */
+        if (nx <= PF_LEFT + 2) {
+            s_extra_balls[i].dx = -s_extra_balls[i].dx;
+            nx = PF_LEFT + 3;
+        }
+        if (nx + BALL_SIZE >= PF_LEFT + PF_WIDTH - 2) {
+            s_extra_balls[i].dx = -s_extra_balls[i].dx;
+            nx = PF_LEFT + PF_WIDTH - 2 - BALL_SIZE - 1;
+        }
+        if (ny <= PF_TOP + 2) {
+            s_extra_balls[i].dy = -s_extra_balls[i].dy;
+            ny = PF_TOP + 3;
+        }
+
+        /* Death — extra ball just disappears */
+        if (ny >= PF_BOTTOM) {
+            vid_fill_rect(s_extra_balls[i].x, s_extra_balls[i].y,
+                          BALL_SIZE, BALL_SIZE, COL_BLACK);
+            vid_fill_rect(s_extra_prev_x[i], s_extra_prev_y[i],
+                          BALL_SIZE, BALL_SIZE, COL_BLACK);
+            s_extra_balls[i].active = 0;
+            continue;
+        }
+
+        /* Paddle collision */
+        if (s_extra_balls[i].dy > 0 &&
+            ny + BALL_SIZE >= PADDLE_Y && ny < PADDLE_Y + PADDLE_H &&
+            nx + BALL_SIZE >= (int16_t)g_paddle_x &&
+            nx <= (int16_t)(g_paddle_x + g_paddle_w)) {
+            s_extra_balls[i].dy = -s_extra_balls[i].dy;
+            ny = PADDLE_Y - BALL_SIZE - 1;
+        }
+
+        /* Brick collision (simplified — centre point check) */
+        cx = nx + BALL_SIZE / 2 - GRID_LEFT;
+        ty = ny + BALL_SIZE / 2 - GRID_TOP;
+        if (cx >= 0 && cx < BRICK_COLS * BRICK_W &&
+            ty >= 0 && ty < BRICK_ROWS * BRICK_H) {
+            gc = (uint8_t)(cx / BRICK_W);
+            gr = (uint8_t)(ty / BRICK_H);
+            if (g_bricks[gr][gc] != BRK_EMPTY) {
+                hit_brick(gr, gc);
+                s_extra_balls[i].dy = -s_extra_balls[i].dy;
+                ny = (int16_t)s_extra_balls[i].y;
+            }
+        }
+
+        /* Draw: move ball */
+        vid_move_ball(s_extra_prev_x[i], s_extra_prev_y[i],
+                      (uint16_t)nx, (uint16_t)ny, BALL_SIZE);
+
+        s_extra_balls[i].x = (uint16_t)nx;
+        s_extra_balls[i].y = (uint16_t)ny;
+        s_extra_prev_x[i] = (uint16_t)nx;
+        s_extra_prev_y[i] = (uint16_t)ny;
+    }
 }
 
 /* ── Update ── */
@@ -499,6 +738,24 @@ void game_update(void)
 
     /* Update falling capsule */
     game_update_capsule();
+
+    /* Update laser bolts */
+    game_update_lasers();
+
+    /* Update extra balls (disruption) */
+    update_extra_balls();
+
+    /* Power-up timer expiry */
+    if (g_paddle_mode != PMODE_NORMAL && s_powerup_timer > 0) {
+        s_powerup_timer--;
+        if (s_powerup_timer == 0) {
+            /* Erase old paddle, reset to normal */
+            vid_fill_rect(g_paddle_x, PADDLE_Y, g_paddle_w, PADDLE_H, COL_BLACK);
+            g_paddle_mode = PMODE_NORMAL;
+            g_paddle_w = PADDLE_W;
+            game_draw_paddle_force();
+        }
+    }
 
     /* Update enemies */
     enemy_update();
@@ -536,6 +793,25 @@ void game_update(void)
         vid_fill_rect(g_ball.x, g_ball.y, BALL_SIZE, BALL_SIZE, COL_BLACK);
         vid_fill_rect(s_prev_ball_x, s_prev_ball_y, BALL_SIZE, BALL_SIZE, COL_BLACK);
         g_ball.active = 0;
+
+        /* If extra balls alive, promote one instead of losing a life */
+        {
+            uint8_t ei;
+            for (ei = 0; ei < MAX_BALLS - 1; ei++) {
+                if (s_extra_balls[ei].active) {
+                    g_ball.active = 1;
+                    g_ball.x = s_extra_balls[ei].x;
+                    g_ball.y = s_extra_balls[ei].y;
+                    g_ball.dx = s_extra_balls[ei].dx;
+                    g_ball.dy = s_extra_balls[ei].dy;
+                    s_prev_ball_x = s_extra_prev_x[ei];
+                    s_prev_ball_y = s_extra_prev_y[ei];
+                    s_extra_balls[ei].active = 0;
+                    return;
+                }
+            }
+        }
+
         g_lives--;
         g_dirty |= DIRTY_LIVES;
         /* Reset paddle to normal on death */
@@ -551,6 +827,11 @@ void game_update(void)
         }
         /* Clear enemies on death */
         enemy_reset();
+        /* Clear extra balls */
+        erase_extra_balls();
+        /* Clear laser bolts */
+        g_lasers[0].active = 0;
+        g_lasers[1].active = 0;
         sfx_lose_life();
         if (g_lives == 0) {
             g_state = STATE_GAMEOVER;
