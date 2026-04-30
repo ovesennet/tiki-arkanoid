@@ -26,7 +26,7 @@ KBIT_FIRE   equ 2       ; space
 KBIT_QUIT   equ 3       ; 'q'
 KBIT_PAUSE  equ 4       ; 'p'
 KBIT_AUTO   equ 5       ; '0' (autoplay toggle)
-KBIT_NEXT   equ 6       ; '+' (next level)
+KBIT_NEXT   equ 6       ; 'u' (next level)
 KBIT_ANY    equ 7       ; any key
 
 _kbd_init:
@@ -99,7 +99,7 @@ ks_no_d:
     cpl
     or      d
     ld      d, a
-    bit     5, c            ; 'n': bit 5
+    bit     5, c            ; 'u': bit 5
     jr      nz, ks_no_n
     set     KBIT_NEXT, e
 ks_no_n:

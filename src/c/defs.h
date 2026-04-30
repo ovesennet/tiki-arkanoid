@@ -89,7 +89,7 @@
 #define KEY_PAUSE      'p'
 
 /* ── Scoring ───────────────────────────────────────────── */
-#define START_LIVES    100
+#define START_LIVES    5
 #define EXTRA_LIFE_PTS 20000UL
 
 /* ── Power-up capsule types ────────────────────────────── */

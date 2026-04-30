@@ -245,6 +245,8 @@ void game_draw_playfield(void)
         for (c = 0; c < BRICK_COLS; c++)
             if (g_bricks[r][c] != BRK_EMPTY)
                 game_draw_brick(r, c);
+
+    draw_text_centred(4, "TIKI ARKANOID BY ARCTIC RETRO", COL_GREEN);
 }
 
 /* Paddle body colour based on current mode */

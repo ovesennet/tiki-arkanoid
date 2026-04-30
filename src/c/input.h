@@ -14,7 +14,7 @@
 #define KBIT_QUIT   0x08    /* 'q' held */
 #define KBIT_PAUSE  0x10    /* 'p' held */
 #define KBIT_AUTO   0x20    /* '0' held (autoplay toggle) */
-#define KBIT_NEXT   0x40    /* 'n' held (next level) */
+#define KBIT_NEXT   0x40    /* 'u' held (next level) */
 #define KBIT_ANY    0x80    /* any key held */
 
 void input_init(void);
